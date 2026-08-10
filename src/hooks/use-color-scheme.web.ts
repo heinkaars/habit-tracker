@@ -9,7 +9,6 @@ export function useColorScheme() {
 
   useEffect(() => {
     // Intentional: flags the first client render after static/SSR hydration.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHasHydrated(true);
   }, []);
 

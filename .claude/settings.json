@@ -1,5 +1,26 @@
 {
   "enabledPlugins": {
     "expo@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx tsc --noEmit *)",
+      "Bash(npm run lint)",
+      "Bash(npm run lint *)",
+      "Bash(npm run web)",
+      "Bash(npm run web *)",
+      "Bash(npx expo-doctor)",
+      "Bash(npx expo-doctor *)",
+      "Bash(npx --yes expo-doctor@latest)",
+      "Bash(npx --yes expo-doctor@latest *)",
+      "Bash(ipconfig getifaddr *)",
+      "mcp__Claude_Browser__navigate",
+      "mcp__Claude_Browser__read_page",
+      "mcp__Claude_Browser__get_page_text",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__resize_window"
+    ]
   }
 }
