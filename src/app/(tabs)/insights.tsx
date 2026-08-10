@@ -82,6 +82,7 @@ export default function InsightsScreen() {
     () => ({
       checkIns: habits.reduce((sum, habit) => sum + totalCheckIns(habit), 0),
       best: habits.reduce((best, habit) => Math.max(best, longestStreak(habit)), 0),
+      active: habits.reduce((best, habit) => Math.max(best, streak(habit)), 0),
     }),
     [habits],
   );
@@ -126,19 +127,12 @@ export default function InsightsScreen() {
               <ConsistencyChart days={chartDays} />
             </ThemedView>
 
+            {/* Labels are kept short and centred — "longest streak ever" wrapped
+                to two left-aligned lines against a centred number. */}
             <View style={styles.statRow}>
-              <ThemedView type="backgroundElement" style={styles.stat}>
-                <ThemedText type="subtitle">{totals.checkIns}</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  total check-ins
-                </ThemedText>
-              </ThemedView>
-              <ThemedView type="backgroundElement" style={styles.stat}>
-                <ThemedText type="subtitle">{totals.best}</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  longest streak ever
-                </ThemedText>
-              </ThemedView>
+              <StatTile icon="✅" value={totals.checkIns} label="Check-ins" />
+              <StatTile icon="🏆" value={totals.best} label="Best streak" />
+              <StatTile icon="🔥" value={totals.active} label="Current streak" />
             </View>
 
             {habits.map((habit) => (
@@ -147,9 +141,16 @@ export default function InsightsScreen() {
                   <ThemedText numberOfLines={1} style={styles.cardTitle}>
                     {habit.emoji} {habit.name}
                   </ThemedText>
-                  <ThemedText type="smallBold" themeColor="textSecondary">
-                    {Math.round(completionRate(habit, RATE_DAYS) * 100)}%
-                  </ThemedText>
+                  {/* Matches the window of the dots directly below it. A 30-day
+                      rate here read as "3%" on a 7-day-old habit. */}
+                  <View style={styles.rateBlock}>
+                    <ThemedText type="smallBold">
+                      {Math.round(completionRate(habit, WEEK_DAYS) * 100)}%
+                    </ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      7 days
+                    </ThemedText>
+                  </View>
                 </View>
 
                 <View style={styles.dayRow}>
@@ -179,6 +180,7 @@ export default function InsightsScreen() {
 
                 <ThemedText type="small" themeColor="textSecondary">
                   {streak(habit) > 0 ? `🔥 ${streak(habit)} day streak` : 'No active streak'}
+                  {` · ${Math.round(completionRate(habit, RATE_DAYS) * 100)}% over ${RATE_DAYS} days`}
                   {habit.kind === 'count' ? ` · target ${habit.target}×/day` : ''}
                 </ThemedText>
               </ThemedView>
@@ -210,6 +212,18 @@ export default function InsightsScreen() {
   );
 }
 
+function StatTile({ icon, value, label }: { icon: string; value: number; label: string }) {
+  return (
+    <ThemedView type="backgroundElement" style={styles.stat}>
+      <ThemedText style={styles.statIcon}>{icon}</ThemedText>
+      <ThemedText type="subtitle">{value}</ThemedText>
+      <ThemedText type="small" themeColor="textSecondary" style={styles.statLabel}>
+        {label}
+      </ThemedText>
+    </ThemedView>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -230,9 +244,21 @@ const styles = StyleSheet.create({
   },
   stat: {
     flex: 1,
-    padding: Spacing.three,
+    paddingVertical: Spacing.four,
+    paddingHorizontal: Spacing.two,
     borderRadius: Spacing.three,
-    gap: Spacing.half,
+    // Was `half` — the icon, number and label were crammed together.
+    gap: Spacing.two,
+    alignItems: 'center',
+  },
+  statIcon: {
+    fontSize: 18,
+  },
+  statLabel: {
+    textAlign: 'center',
+  },
+  rateBlock: {
+    alignItems: 'flex-end',
   },
   card: {
     padding: Spacing.three,

@@ -18,9 +18,32 @@ export type Habit = {
   /** Repetitions needed for a day to count as complete. Always 1 for binary. */
   target: number;
   createdAt: string;
+  /** Local `HH:MM` to nudge at, or null for no reminder on this habit. */
+  reminderTime: string | null;
   /** Day key -> repetitions logged that day. Absent means zero. */
   log: Record<string, number>;
 };
+
+/** `HH:MM` -> {hour, minute}, or null if unparseable. */
+export function parseTime(value: string | null): { hour: number; minute: number } | null {
+  if (!value) return null;
+
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+
+  return { hour, minute };
+}
+
+export function formatTime(value: string | null): string {
+  const parsed = parseTime(value);
+  if (!parsed) return 'Off';
+
+  return `${String(parsed.hour).padStart(2, '0')}:${String(parsed.minute).padStart(2, '0')}`;
+}
 
 /** Local-time `YYYY-MM-DD`. Deliberately not UTC — "today" means the user's today. */
 export function dayKey(date: Date = new Date()): string {
@@ -132,6 +155,7 @@ export function createHabit(
   emoji: string,
   kind: HabitKind,
   target: number,
+  reminderTime: string | null = null,
   today: Date = new Date(),
 ): Habit {
   return {
@@ -141,11 +165,15 @@ export function createHabit(
     kind,
     target: kind === 'binary' ? 1 : Math.max(2, Math.round(target)),
     createdAt: dayKey(today),
+    reminderTime: parseTime(reminderTime) ? reminderTime : null,
     log: {},
   };
 }
 
-export const EMOJI_CHOICES = ['✅', '🏃', '📖', '💧', '🧘', '🌙', '🥗', '🎸'] as const;
+export const EMOJI_CHOICES = [
+  '✅', '🏃', '📖', '💧', '🧘', '🌙', '🥗', '🎸',
+  '🚶', '💊', '🥦', '🧠', '💤',
+] as const;
 
 /**
  * Starter data so a fresh install has something to look at. The completion
@@ -158,6 +186,7 @@ export function seedHabits(today: Date = new Date()): Habit[] {
       emoji: '🏃',
       kind: 'binary' as const,
       target: 1,
+      reminderTime: '07:00',
       daysAgo: [0, 1, 2, 4, 5, 6, 8, 9, 11, 12, 13],
     },
     {
@@ -165,6 +194,7 @@ export function seedHabits(today: Date = new Date()): Habit[] {
       emoji: '📖',
       kind: 'binary' as const,
       target: 1,
+      reminderTime: '21:00',
       daysAgo: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12],
     },
     {
@@ -172,6 +202,7 @@ export function seedHabits(today: Date = new Date()): Habit[] {
       emoji: '💧',
       kind: 'count' as const,
       target: 4,
+      reminderTime: '12:00',
       daysAgo: [1, 2, 3, 5, 6, 7, 9, 10],
     },
     {
@@ -179,6 +210,7 @@ export function seedHabits(today: Date = new Date()): Habit[] {
       emoji: '🌙',
       kind: 'binary' as const,
       target: 1,
+      reminderTime: null,
       daysAgo: [2, 3, 6, 7, 10, 13],
     },
   ];
@@ -190,6 +222,7 @@ export function seedHabits(today: Date = new Date()): Habit[] {
     kind: habit.kind,
     target: habit.target,
     createdAt: dayKey(addDays(today, -30)),
+    reminderTime: habit.reminderTime,
     log: Object.fromEntries(habit.daysAgo.map((offset) => [dayKey(addDays(today, -offset)), habit.target])),
   }));
 }
@@ -211,6 +244,7 @@ export function migrateV1(habits: HabitV1[]): Habit[] {
     kind: 'binary',
     target: 1,
     createdAt: habit.createdAt,
+    reminderTime: null,
     log: Object.fromEntries(habit.done.map((key) => [key, 1])),
   }));
 }

@@ -109,7 +109,9 @@ export function Celebration({ variant, message, onDone }: CelebrationProps) {
 
       {message && (
         <Animated.View style={[styles.label, { backgroundColor: theme.accent }, labelStyle]}>
-          <ThemedText style={styles.labelText}>{message}</ThemedText>
+          <ThemedText themeColor="onAccent" style={styles.labelText}>
+            {message}
+          </ThemedText>
         </Animated.View>
       )}
     </View>
@@ -140,7 +142,6 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.four,
   },
   labelText: {
-    color: '#ffffff',
     fontWeight: '700',
   },
 });

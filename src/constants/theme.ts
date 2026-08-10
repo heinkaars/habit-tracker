@@ -16,6 +16,10 @@ export const Colors = {
     textSecondary: '#60646C',
     accent: '#2F6FED',
     accentSoft: '#E4EDFF',
+    /** Foreground for anything sitting ON `accent`. Never hardcode white here —
+     *  dark mode's accent is a light blue, where white measures 2.69:1. */
+    onAccent: '#ffffff',
+    disabledSurface: '#E0E1E6',
   },
   dark: {
     text: '#ffffff',
@@ -25,6 +29,8 @@ export const Colors = {
     textSecondary: '#B0B4BA',
     accent: '#6E9BFF',
     accentSoft: '#16213D',
+    onAccent: '#0B1220',
+    disabledSurface: '#2E3135',
   },
 } as const;
 

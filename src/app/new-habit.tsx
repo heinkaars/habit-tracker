@@ -1,127 +1,239 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
+import { SelectChip } from '@/components/select-chip';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useHabits } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
-import { EMOJI_CHOICES, type HabitKind } from '@/lib/habits';
+import { EMOJI_CHOICES, formatTime, parseTime, type Habit, type HabitKind } from '@/lib/habits';
+import { SUGGESTED_TIMES, notificationsSupported } from '@/lib/notifications';
 
 const TARGET_OPTIONS = [2, 3, 4, 6, 8];
 
-export default function NewHabitScreen() {
+/** Doubles as the edit screen when given `?id=` — keeps the surface count at 6. */
+export default function HabitFormScreen() {
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  const { habits, loading } = useHabits();
+
+  // The form seeds its fields from `useState` initialisers, which only run once.
+  // Waiting for storage (and keying by id) is what makes an edit arrive filled in.
+  if (loading) {
+    return (
+      <ThemedView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.content}>
+          <ThemedText type="small" themeColor="textSecondary">
+            Loading…
+          </ThemedText>
+        </ScrollView>
+      </ThemedView>
+    );
+  }
+
+  const existing = id ? habits.find((habit) => habit.id === id) : undefined;
+
+  return <HabitForm key={existing?.id ?? 'new'} existing={existing} />;
+}
+
+function HabitForm({ existing }: { existing?: Habit }) {
   const theme = useTheme();
   const router = useRouter();
-  const { add } = useHabits();
+  const navigation = useNavigation();
+  const { add, update } = useHabits();
 
-  const [name, setName] = useState('');
-  const [emoji, setEmoji] = useState<string>(EMOJI_CHOICES[0]);
-  const [kind, setKind] = useState<HabitKind>('binary');
-  const [target, setTarget] = useState(4);
+  const editing = Boolean(existing);
 
-  const valid = name.trim().length > 0;
+  const [name, setName] = useState(existing?.name ?? '');
+  const [emoji, setEmoji] = useState<string>(existing?.emoji ?? EMOJI_CHOICES[0]);
+  const [kind, setKind] = useState<HabitKind>(existing?.kind ?? 'binary');
+  const [target, setTarget] = useState(existing?.target && existing.target > 1 ? existing.target : 4);
+  const [reminder, setReminder] = useState<string>(existing?.reminderTime ?? '');
+
+  useEffect(() => {
+    navigation.setOptions({ title: editing ? 'Edit habit' : 'New habit' });
+  }, [navigation, editing]);
+
+  const trimmedName = name.trim();
+  const valid = trimmedName.length > 0;
+  const parsedReminder = parseTime(reminder);
+  const reminderValid = reminder.trim() === '' || Boolean(parsedReminder);
+  const canSubmit = valid && reminderValid;
 
   function submit() {
-    if (!valid) return;
+    if (!canSubmit) return;
 
-    add(name, emoji, kind, target);
+    const reminderTime = parsedReminder ? reminder.trim() : null;
+    const draft = { name, emoji, kind, target, reminderTime };
+
+    if (existing) {
+      update(existing.id, draft);
+    } else {
+      add(draft);
+    }
+
+    // The user asked to be told, explicitly, that a reminder is actually set.
+    if (reminderTime) {
+      Alert.alert(
+        'Reminder set',
+        `${emoji} ${trimmedName} will remind you every day at ${formatTime(reminderTime)}.${
+          notificationsSupported() ? '' : '\n\nReminders only fire on iOS or Android.'
+        }`,
+        [{ text: 'Done', onPress: () => router.back() }],
+      );
+      return;
+    }
+
     router.back();
   }
 
   return (
     <ThemedView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <ThemedText type="smallBold">What do you want to track?</ThemedText>
-        <TextInput
-          value={name}
-          onChangeText={setName}
-          placeholder="Meditate for 10 minutes"
-          placeholderTextColor={theme.textSecondary}
-          returnKeyType="done"
-          onSubmitEditing={submit}
-          autoFocus
-          style={[
-            styles.input,
-            { color: theme.text, backgroundColor: theme.backgroundElement },
-          ]}
-        />
-
-        <ThemedText type="smallBold">Icon</ThemedText>
-        <View style={styles.chips}>
-          {EMOJI_CHOICES.map((choice) => (
-            <Pressable
-              key={choice}
-              onPress={() => setEmoji(choice)}
-              accessibilityRole="button"
-              accessibilityLabel={`Icon ${choice}`}
-              accessibilityState={{ selected: choice === emoji }}
-              style={[
-                styles.emojiChip,
-                {
-                  backgroundColor: choice === emoji ? theme.accentSoft : theme.backgroundElement,
-                  borderColor: choice === emoji ? theme.accent : 'transparent',
-                },
-              ]}>
-              <ThemedText>{choice}</ThemedText>
-            </Pressable>
-          ))}
-        </View>
-
-        <ThemedText type="smallBold">How does it work?</ThemedText>
-        <View style={styles.chips}>
-          <KindChip
-            label="Once a day"
-            hint="Done or not done"
-            selected={kind === 'binary'}
-            onPress={() => setKind('binary')}
+        <ThemedView type="backgroundElement" style={styles.card}>
+          <ThemedText type="smallBold">What do you want to track?</ThemedText>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="Morning run"
+            placeholderTextColor={theme.textSecondary}
+            returnKeyType="done"
+            onSubmitEditing={submit}
+            autoFocus={!editing}
+            style={[styles.input, { color: theme.text, backgroundColor: theme.backgroundSelected }]}
           />
-          <KindChip
-            label="Several times a day"
-            hint="Counts toward a target"
-            selected={kind === 'count'}
-            onPress={() => setKind('count')}
-          />
-        </View>
+        </ThemedView>
 
-        {kind === 'count' && (
-          <>
-            <ThemedText type="smallBold">How many times a day?</ThemedText>
-            <View style={styles.chips}>
-              {TARGET_OPTIONS.map((option) => (
-                <Pressable
-                  key={option}
-                  onPress={() => setTarget(option)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${option} times a day`}
-                  accessibilityState={{ selected: option === target }}
-                  style={[
-                    styles.chip,
-                    {
-                      backgroundColor:
-                        option === target ? theme.accentSoft : theme.backgroundElement,
-                      borderColor: option === target ? theme.accent : 'transparent',
-                    },
-                  ]}>
-                  <ThemedText type="small">{option}×</ThemedText>
-                </Pressable>
-              ))}
-            </View>
-          </>
-        )}
+        <ThemedView type="backgroundElement" style={styles.card}>
+          <ThemedText type="smallBold">Icon</ThemedText>
+          <View style={styles.chips}>
+            {EMOJI_CHOICES.map((choice) => (
+              <Pressable
+                key={choice}
+                onPress={() => setEmoji(choice)}
+                accessibilityRole="button"
+                accessibilityLabel={`Icon ${choice}`}
+                accessibilityState={{ selected: choice === emoji }}
+                style={[
+                  styles.emojiChip,
+                  {
+                    backgroundColor: choice === emoji ? theme.accent : theme.backgroundSelected,
+                    borderColor: choice === emoji ? theme.accent : 'transparent',
+                  },
+                ]}>
+                <ThemedText>{choice}</ThemedText>
+              </Pressable>
+            ))}
+          </View>
+        </ThemedView>
+
+        <ThemedView type="backgroundElement" style={styles.card}>
+          <ThemedText type="smallBold">How does it work?</ThemedText>
+          <View style={styles.chips}>
+            <KindChip
+              label="Once a day"
+              hint="Done or not done"
+              selected={kind === 'binary'}
+              onPress={() => setKind('binary')}
+            />
+            <KindChip
+              label="Several times a day"
+              hint="Counts toward a target"
+              selected={kind === 'count'}
+              onPress={() => setKind('count')}
+            />
+          </View>
+
+          {kind === 'count' && (
+            <>
+              <ThemedText type="small" themeColor="textSecondary">
+                How many times a day?
+              </ThemedText>
+              <View style={styles.chips}>
+                {TARGET_OPTIONS.map((option) => (
+                  <SelectChip
+                    key={option}
+                    label={`${option}×`}
+                    accessibilityLabel={`${option} times a day`}
+                    selected={option === target}
+                    onPress={() => setTarget(option)}
+                  />
+                ))}
+              </View>
+            </>
+          )}
+        </ThemedView>
+
+        {/* One card holds the label, the picks, the free-text field and the
+            resulting state, so the section reads as a single control. */}
+        <ThemedView type="backgroundElement" style={styles.card}>
+          <ThemedText type="smallBold">Remind me at</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            Each habit has its own time. Leave blank for no reminder.
+          </ThemedText>
+
+          <View style={styles.chips}>
+            {SUGGESTED_TIMES.map((option) => (
+              <SelectChip
+                key={option}
+                label={option}
+                accessibilityLabel={`Remind at ${option}`}
+                selected={reminder === option}
+                onPress={() => setReminder(reminder === option ? '' : option)}
+              />
+            ))}
+          </View>
+
+          <TextInput
+            value={reminder}
+            onChangeText={setReminder}
+            placeholder="Or type a time — 06:45"
+            placeholderTextColor={theme.textSecondary}
+            keyboardType="numbers-and-punctuation"
+            accessibilityLabel="Reminder time"
+            style={[
+              styles.input,
+              {
+                color: theme.text,
+                backgroundColor: theme.backgroundSelected,
+                borderColor: reminderValid ? 'transparent' : theme.accent,
+              },
+            ]}
+          />
+
+          <ThemedView
+            type={parsedReminder ? 'accentSoft' : 'background'}
+            style={[styles.confirm, { borderColor: parsedReminder ? theme.accent : 'transparent' }]}>
+            <ThemedText
+              type="small"
+              themeColor={!reminderValid ? 'accent' : parsedReminder ? 'text' : 'textSecondary'}>
+              {!reminderValid
+                ? 'Use 24-hour HH:MM, e.g. 06:45.'
+                : parsedReminder
+                  ? `✓ Reminds every day at ${formatTime(reminder)}`
+                  : 'No reminder for this habit.'}
+            </ThemedText>
+          </ThemedView>
+        </ThemedView>
 
         <Pressable
           onPress={submit}
-          disabled={!valid}
+          disabled={!canSubmit}
           accessibilityRole="button"
+          accessibilityState={{ disabled: !canSubmit }}
           style={({ pressed }) => [
             styles.primary,
-            { backgroundColor: theme.accent },
-            !valid && styles.disabled,
+            // Swap the surface rather than fading the whole button — dropping
+            // opacity fades label and background together into invisibility.
+            { backgroundColor: canSubmit ? theme.accent : theme.disabledSurface },
             pressed && styles.pressed,
           ]}>
-          <ThemedText style={styles.primaryLabel}>Add habit</ThemedText>
+          <ThemedText
+            themeColor={canSubmit ? 'onAccent' : 'textSecondary'}
+            style={styles.primaryLabel}>
+            {editing ? 'Save changes' : 'Add habit'}
+          </ThemedText>
         </Pressable>
       </ScrollView>
     </ThemedView>
@@ -145,11 +257,12 @@ function KindChip({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
+      accessibilityLabel={label}
       accessibilityState={{ selected }}
       style={[
         styles.kindChip,
         {
-          backgroundColor: selected ? theme.accentSoft : theme.backgroundElement,
+          backgroundColor: selected ? theme.accentSoft : theme.backgroundSelected,
           borderColor: selected ? theme.accent : 'transparent',
         },
       ]}>
@@ -167,14 +280,20 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: Spacing.three,
-    gap: Spacing.two,
+    gap: Spacing.three,
     alignSelf: 'center',
     width: '100%',
     maxWidth: MaxContentWidth,
   },
+  card: {
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+    gap: Spacing.two,
+  },
   input: {
     height: 48,
     borderRadius: Spacing.two,
+    borderWidth: 1,
     paddingHorizontal: Spacing.three,
     fontSize: 16,
   },
@@ -205,18 +324,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: Spacing.half,
   },
+  confirm: {
+    padding: Spacing.two,
+    borderRadius: Spacing.two,
+    borderWidth: 1,
+  },
   primary: {
-    marginTop: Spacing.three,
     paddingVertical: Spacing.three,
     borderRadius: Spacing.three,
     alignItems: 'center',
   },
   primaryLabel: {
-    color: '#ffffff',
     fontWeight: '700',
-  },
-  disabled: {
-    opacity: 0.4,
   },
   pressed: {
     opacity: 0.7,

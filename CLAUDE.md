@@ -20,6 +20,8 @@ It is deliberately structured around a product framework — keep changes inside
 
 **Surface-area budget: 5–7 screens, and it currently sits at 6** (4 tabs + onboarding + the new-habit modal). Adding a seventh needs a deliberate decision; an eighth means merging something first. This is a product constraint, not an accident.
 
+Two things deliberately avoid spending that budget: `new-habit.tsx` doubles as the **edit** screen via `?id=`, and the developer tools live in a `__DEV__`-gated section of Settings rather than their own screen.
+
 ## Expo SDK 54 is pinned deliberately — do not upgrade
 
 The project was moved down from SDK 57 to **SDK 54** because the target iPhone's Expo Go supports SDK 54 and cannot be updated further (iOS version cap). Running `npx expo install --fix` against a newer `expo` package, or bumping `expo` in `package.json`, will silently break the only way this app gets onto the device.
@@ -70,13 +72,29 @@ Screens are stateless with respect to habits — they read `useHabits()` and cal
 
 ### Storage migrations
 
-`use-habits.tsx` reads `habit-tracker.state.v2`, falling back to the v1 key and running `migrateV1()`. **Any future change to the `Habit` shape needs a new key and another forward-read** — users have real history on device and reseeding silently destroys it.
+`use-habits.tsx` reads `habit-tracker.state.v2`, falling back to the v1 key and running `migrateV1()`. Users have real history on device, so reseeding silently destroys it. Two cases:
+
+- **Additive fields** (a new nullable property) are filled in by `normalize()` on read. Nothing already stored is reinterpreted, so the key stays.
+- **Anything that reinterprets existing data** needs a new key plus another forward-read, like v1 → v2 did.
 
 ### Feedback and notifications
 
 - `feedback.ts` keeps audio players alive for the session; creating one per tap adds latency that visibly decouples the reward from the press. Sound respects the device silent switch by design.
 - Reminders are **local scheduled** notifications, which is why they work in Expo Go. Remote push would need a development build. `rescheduleReminders()` rebuilds the whole schedule rather than diffing it.
-- Both degrade on web: haptics no-op, notifications are unsupported and Settings says so.
+- **Reminder times live on the habit** (`habit.reminderTime`, local `HH:MM` or null), not in settings. Settings holds only the master on/off. One notification is scheduled per habit that has a time.
+- Both degrade on web: haptics no-op and notifications never fire. Settings still shows and saves the times there, with a note, so the config is testable in the browser preview.
+
+### Colour rules that are not cosmetic
+
+**Never hardcode `#ffffff` for text on `accent`.** Dark mode's accent is a *light* blue, where white measures 2.69:1 and reads as invisible — this shipped once and had to be fixed everywhere. Use `themeColor="onAccent"`, which is white in light mode and near-black in dark.
+
+**Never disable a button with blanket `opacity`.** Fading the surface and its label together is what made "Add habit" vanish. Swap the surface to `disabledSurface` and the label to `textSecondary` instead.
+
+**Never put `background` on top of `backgroundElement`.** Inside a card, `background` is pure black in dark mode and reads as a hole punched in the surface — chips styled that way looked like unstyled checkboxes. Controls and inputs sitting on a card use `backgroundSelected`.
+
+**All selection controls go through `<SelectChip>`.** Selected is a solid `accent` fill, not a tinted outline: the tinted version was nearly the same value as the dark card behind it. If you need a new selector, use this component rather than restyling a `Pressable`.
+
+**Don't scale a full-width element to animate it.** The check-in pop originally scaled the whole habit row, which pushed it past the screen edges and clipped its corners; it now scales only the badge. Transition animations must also skip the mount pass, or every already-complete habit animates on load.
 
 ## Conventions
 

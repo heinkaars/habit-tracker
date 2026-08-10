@@ -1,4 +1,4 @@
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,13 +10,14 @@ import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useHabits } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
-import { daysRemaining } from '@/lib/challenges';
+import { challengeTitle, daysRemaining } from '@/lib/challenges';
 import { dayKey, isComplete } from '@/lib/habits';
 
 const CHEERS = ['Nice.', 'Logged.', 'Kept it going.', 'That’s the one.'];
 
 export default function TodayScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const safeArea = useSafeAreaInsets();
   const { habits, challenge, loading, step, remove } = useHabits();
 
@@ -52,10 +53,19 @@ export default function TodayScreen() {
 
   const clearCelebration = useCallback(() => setCelebration(null), []);
 
-  function confirmRemove(id: string, name: string) {
-    Alert.alert('Delete habit', `Remove "${name}" and its history?`, [
+  function openHabitMenu(id: string, name: string) {
+    Alert.alert(name, undefined, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => remove(id) },
+      { text: 'Edit', onPress: () => router.push(`/new-habit?id=${id}`) },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () =>
+          Alert.alert('Delete habit', `Remove "${name}" and its history?`, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Delete', style: 'destructive', onPress: () => remove(id) },
+          ]),
+      },
     ]);
   }
 
@@ -97,11 +107,11 @@ export default function TodayScreen() {
 
         {challenge && challengeHabit && !challenge.completedAt && (
           <Link href="/challenge" asChild>
-            <Pressable style={({ pressed }) => pressed && styles.pressed}>
+            <Pressable
+              style={({ pressed }) => [styles.bannerPressable, pressed && styles.pressed]}>
               <ThemedView type="accentSoft" style={[styles.banner, { borderColor: theme.accent }]}>
                 <ThemedText type="smallBold">
-                  🏆 {challenge.lengthDays}-day challenge · {challengeHabit.emoji}{' '}
-                  {challengeHabit.name}
+                  🏆 {challengeTitle(challenge)} · {challengeHabit.emoji} {challengeHabit.name}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   {daysRemaining(challenge) === 1
@@ -123,7 +133,7 @@ export default function TodayScreen() {
               key={habit.id}
               habit={habit}
               onPress={() => onStep(habit.id)}
-              onLongPress={() => confirmRemove(habit.id, habit.name)}
+              onLongPress={() => openHabitMenu(habit.id, habit.name)}
             />
           ))
         )}
@@ -149,7 +159,7 @@ export default function TodayScreen() {
         </Link>
 
         <ThemedText type="small" themeColor="textSecondary">
-          Tap a habit to log it. Long press to delete.
+          Tap a habit to log it. Long press to edit or delete.
         </ThemedText>
       </ScrollView>
 
@@ -185,6 +195,9 @@ const styles = StyleSheet.create({
   fill: {
     height: '100%',
     borderRadius: 4,
+  },
+  bannerPressable: {
+    alignSelf: 'stretch',
   },
   banner: {
     padding: Spacing.three,

@@ -7,10 +7,11 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-import type { Habit } from '@/lib/habits';
+import { parseTime, type Habit } from '@/lib/habits';
 
-/** Slots default to a morning start-your-day nudge and an evening last-call. */
-export const DEFAULT_REMINDER_HOURS = [9, 20];
+/** Offered as quick picks when setting a habit's reminder. */
+export const SUGGESTED_TIMES = ['07:00', '09:00', '12:00', '18:00', '20:00', '21:00'];
+export const DEFAULT_REMINDER_TIME = '09:00';
 
 export function configureNotificationHandler() {
   Notifications.setNotificationHandler({
@@ -41,34 +42,24 @@ export async function requestPermission(): Promise<boolean> {
   }
 }
 
-/** Morning leads with intent, evening leads with the gap that's still open. */
-function copyFor(hour: number, habits: Habit[]): { title: string; body: string } {
-  const names = habits.map((habit) => `${habit.emoji} ${habit.name}`);
-  const sample = names.length > 0 ? names[Math.floor(Math.random() * names.length)] : 'your habits';
+/** Morning leads with intent; later in the day leads with the gap still open. */
+function copyFor(habit: Habit, hour: number): { title: string; body: string } {
+  const label = `${habit.emoji} ${habit.name}`;
 
   if (hour < 12) {
-    return {
-      title: 'Ready to start?',
-      body: names.length > 0 ? `${sample} is waiting for you today.` : 'Set up a habit to track today.',
-    };
+    return { title: label, body: 'Good time to get this one done.' };
   }
 
-  return {
-    title: "Don't lose the streak",
-    body:
-      names.length > 0
-        ? `Still time to check off ${sample} before the day is out.`
-        : 'Check in before the day is out.',
-  };
+  return { title: label, body: "Still open — there's time before the day is out." };
 }
 
 /**
- * Replaces the whole schedule rather than diffing it — there are only a couple
- * of notifications and rebuilding is far easier to reason about than reconciling.
+ * One daily notification per habit that has a reminder time. Replaces the whole
+ * schedule rather than diffing it: the counts are small, and rebuilding is far
+ * easier to reason about than reconciling.
  */
 export async function rescheduleReminders(options: {
   enabled: boolean;
-  hours: number[];
   habits: Habit[];
 }): Promise<void> {
   if (!notificationsSupported()) return;
@@ -77,16 +68,22 @@ export async function rescheduleReminders(options: {
     await Notifications.cancelAllScheduledNotificationsAsync();
     if (!options.enabled) return;
 
+    const withReminders = options.habits.filter((habit) => parseTime(habit.reminderTime));
+    if (withReminders.length === 0) return;
+
     const granted = await requestPermission();
     if (!granted) return;
 
-    for (const hour of options.hours) {
+    for (const habit of withReminders) {
+      const time = parseTime(habit.reminderTime);
+      if (!time) continue;
+
       await Notifications.scheduleNotificationAsync({
-        content: copyFor(hour, options.habits),
+        content: copyFor(habit, time.hour),
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
-          hour,
-          minute: 0,
+          hour: time.hour,
+          minute: time.minute,
         },
       });
     }

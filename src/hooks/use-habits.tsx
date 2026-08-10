@@ -11,8 +11,10 @@ import {
 } from 'react';
 
 import {
+  challengeDays,
   createChallenge,
   isFulfilled,
+  shiftStart,
   type Challenge,
 } from '@/lib/challenges';
 import {
@@ -32,7 +34,7 @@ import {
   type Habit,
   type HabitKind,
 } from '@/lib/habits';
-import { DEFAULT_REMINDER_HOURS, rescheduleReminders } from '@/lib/notifications';
+import { rescheduleReminders } from '@/lib/notifications';
 
 const STORAGE_KEY = 'habit-tracker.state.v2';
 const LEGACY_KEY = 'habit-tracker.habits.v1';
@@ -42,7 +44,6 @@ export type Settings = {
   sound: boolean;
   haptics: boolean;
   remindersEnabled: boolean;
-  reminderHours: number[];
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -50,7 +51,6 @@ const DEFAULT_SETTINGS: Settings = {
   sound: true,
   haptics: true,
   remindersEnabled: false,
-  reminderHours: DEFAULT_REMINDER_HOURS,
 };
 
 type State = {
@@ -59,21 +59,55 @@ type State = {
   settings: Settings;
 };
 
+/** Fields a habit can be edited to. */
+export type HabitDraft = {
+  name: string;
+  emoji: string;
+  kind: HabitKind;
+  target: number;
+  reminderTime: string | null;
+};
+
 /** What a tap produced, so the screen knows which celebration to show. */
 export type StepOutcome = 'progress' | 'complete' | 'undo' | 'challenge';
 
 type HabitsContextValue = State & {
   loading: boolean;
   step: (habitId: string) => StepOutcome;
-  add: (name: string, emoji: string, kind: HabitKind, target: number) => Habit;
+  add: (draft: HabitDraft) => Habit;
+  update: (habitId: string, draft: HabitDraft) => void;
   remove: (habitId: string) => void;
-  startChallenge: (habitId: string, lengthDays?: number) => void;
+  startChallenge: (habitId: string, lengthDays?: number, name?: string) => void;
   dismissChallenge: () => void;
   updateSettings: (patch: Partial<Settings>) => void;
   resetToDemo: () => void;
+  /** Dev-only helpers, surfaced in Settings behind __DEV__. */
+  devShiftChallenge: (deltaDays: number) => void;
+  devFillChallenge: (leaveLastDayOpen: boolean) => void;
 };
 
 const HabitsContext = createContext<HabitsContextValue | null>(null);
+
+/**
+ * Stored state predates `reminderTime` and challenge `name`. Both are additive,
+ * so existing data is filled in on read rather than being stranded behind a new
+ * storage key — nothing already saved is reinterpreted.
+ */
+function normalize(state: State): State {
+  return {
+    habits: (state.habits ?? []).map((habit) => ({
+      ...habit,
+      reminderTime: habit.reminderTime ?? null,
+    })),
+    challenge: state.challenge
+      ? {
+          ...state.challenge,
+          name: state.challenge.name ?? `${state.challenge.lengthDays}-day challenge`,
+        }
+      : null,
+    settings: { ...DEFAULT_SETTINGS, ...(state.settings ?? {}) },
+  };
+}
 
 function initialState(): State {
   return { habits: seedHabits(), challenge: null, settings: DEFAULT_SETTINGS };
@@ -96,7 +130,7 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
 
     async function load(): Promise<State> {
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw) as State;
+      if (raw) return normalize(JSON.parse(raw) as State);
 
       // Read forward from the pre-challenge, pre-habit-kinds shape.
       const legacy = await AsyncStorage.getItem(LEGACY_KEY);
@@ -138,15 +172,18 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     setFeedbackPrefs({ sound: state.settings.sound, haptics: state.settings.haptics });
   }, [state.settings.sound, state.settings.haptics]);
 
+  // Reminder times live on habits now, so the schedule tracks the habit list.
+  const reminderSignature = state.habits
+    .map((habit) => `${habit.id}:${habit.reminderTime ?? ''}:${habit.emoji}${habit.name}`)
+    .join('|');
+
   useEffect(() => {
     if (loading) return;
     rescheduleReminders({
-      enabled: state.settings.remindersEnabled,
-      hours: state.settings.reminderHours,
+      enabled: stateRef.current.settings.remindersEnabled,
       habits: stateRef.current.habits,
     });
-    // Habit names only change reminder copy, so don't reschedule on every edit.
-  }, [loading, state.settings.remindersEnabled, state.settings.reminderHours]);
+  }, [loading, state.settings.remindersEnabled, reminderSignature]);
 
   const step = useCallback((habitId: string): StepOutcome => {
     const today = dayKey();
@@ -189,11 +226,29 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     return 'progress';
   }, []);
 
-  const add = useCallback((name: string, emoji: string, kind: HabitKind, target: number) => {
-    const habit = createHabit(name, emoji, kind, target);
+  const add = useCallback((draft: HabitDraft) => {
+    const habit = createHabit(draft.name, draft.emoji, draft.kind, draft.target, draft.reminderTime);
     setState((current) => ({ ...current, habits: [...current.habits, habit] }));
 
     return habit;
+  }, []);
+
+  const update = useCallback((habitId: string, draft: HabitDraft) => {
+    setState((current) => ({
+      ...current,
+      habits: current.habits.map((habit) =>
+        habit.id === habitId
+          ? {
+              ...habit,
+              name: draft.name.trim() || habit.name,
+              emoji: draft.emoji,
+              kind: draft.kind,
+              target: draft.kind === 'binary' ? 1 : Math.max(2, Math.round(draft.target)),
+              reminderTime: draft.reminderTime,
+            }
+          : habit,
+      ),
+    }));
   }, []);
 
   const remove = useCallback((habitId: string) => {
@@ -205,8 +260,11 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
-  const startChallenge = useCallback((habitId: string, lengthDays?: number) => {
-    setState((current) => ({ ...current, challenge: createChallenge(habitId, lengthDays) }));
+  const startChallenge = useCallback((habitId: string, lengthDays?: number, name?: string) => {
+    setState((current) => ({
+      ...current,
+      challenge: createChallenge(habitId, lengthDays, name),
+    }));
   }, []);
 
   const dismissChallenge = useCallback(() => {
@@ -225,19 +283,74 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const devShiftChallenge = useCallback((deltaDays: number) => {
+    setState((current) =>
+      current.challenge
+        ? { ...current, challenge: shiftStart(current.challenge, deltaDays) }
+        : current,
+    );
+  }, []);
+
+  /**
+   * Fills the challenge habit's log across the challenge window. Leaving the
+   * last day open is the useful case: it puts the real completion event one
+   * genuine tap away instead of faking it.
+   */
+  const devFillChallenge = useCallback((leaveLastDayOpen: boolean) => {
+    setState((current) => {
+      const { challenge } = current;
+      if (!challenge) return current;
+
+      const days = challengeDays(challenge);
+      const fill = leaveLastDayOpen ? days.slice(0, -1) : days;
+
+      return {
+        ...current,
+        challenge: leaveLastDayOpen ? { ...challenge, completedAt: null } : challenge,
+        habits: current.habits.map((habit) =>
+          habit.id === challenge.habitId
+            ? {
+                ...habit,
+                log: {
+                  ...habit.log,
+                  ...Object.fromEntries(fill.map((key) => [key, habit.target])),
+                },
+              }
+            : habit,
+        ),
+      };
+    });
+  }, []);
+
   const value = useMemo(
     () => ({
       ...state,
       loading,
       step,
       add,
+      update,
       remove,
       startChallenge,
       dismissChallenge,
       updateSettings,
       resetToDemo,
+      devShiftChallenge,
+      devFillChallenge,
     }),
-    [state, loading, step, add, remove, startChallenge, dismissChallenge, updateSettings, resetToDemo],
+    [
+      state,
+      loading,
+      step,
+      add,
+      update,
+      remove,
+      startChallenge,
+      dismissChallenge,
+      updateSettings,
+      resetToDemo,
+      devShiftChallenge,
+      devFillChallenge,
+    ],
   );
 
   return <HabitsContext value={value}>{children}</HabitsContext>;

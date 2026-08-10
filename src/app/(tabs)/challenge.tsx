@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SelectChip } from '@/components/select-chip';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -9,8 +10,11 @@ import { useHabits } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
 import {
   DEFAULT_CHALLENGE_DAYS,
+  MAX_CHALLENGE_DAYS,
   challengeDays,
   challengeProgress,
+  challengeTitle,
+  clampLength,
   daysRemaining,
   isExpired,
   isFulfilled,
@@ -59,7 +63,7 @@ export default function ChallengeScreen() {
               style={[styles.card, fulfilled && { borderColor: theme.accent, borderWidth: 1 }]}>
               <ThemedText type="subtitle">{fulfilled ? '🏆' : '🎯'}</ThemedText>
               <ThemedText type="smallBold">
-                {challenge.lengthDays}-day challenge · {habit.emoji} {habit.name}
+                {challengeTitle(challenge)} · {habit.emoji} {habit.name}
               </ThemedText>
 
               <ThemedText type="small" themeColor="textSecondary">
@@ -89,8 +93,7 @@ export default function ChallengeScreen() {
                         ]}>
                         <ThemedText
                           type="smallBold"
-                          style={complete ? styles.boxDone : undefined}
-                          themeColor={complete ? 'text' : 'textSecondary'}>
+                          themeColor={complete ? 'onAccent' : 'textSecondary'}>
                           {complete ? '✓' : missed ? '·' : index + 1}
                         </ThemedText>
                       </View>
@@ -128,12 +131,21 @@ function StartChallenge({
   title = 'Start a challenge',
 }: {
   habits: { id: string; name: string; emoji: string }[];
-  onStart: (habitId: string, lengthDays?: number) => void;
+  onStart: (habitId: string, lengthDays?: number, name?: string) => void;
   title?: string;
 }) {
   const theme = useTheme();
   const [selectedHabit, setSelectedHabit] = useState(habits[0]?.id ?? '');
   const [length, setLength] = useState(DEFAULT_CHALLENGE_DAYS);
+  const [customDays, setCustomDays] = useState('');
+  const [challengeName, setChallengeName] = useState('');
+
+  // A typed value wins over the preset chips, so the two can't disagree.
+  const typed = Number(customDays);
+  const effectiveLength = customDays.trim() !== '' && Number.isFinite(typed)
+    ? clampLength(typed)
+    : length;
+  const customValid = customDays.trim() === '' || (Number.isFinite(typed) && typed >= 1);
 
   if (habits.length === 0) {
     return (
@@ -152,58 +164,75 @@ function StartChallenge({
       </ThemedText>
       <View style={styles.chips}>
         {habits.map((habit) => (
-          <Pressable
+          <SelectChip
             key={habit.id}
+            label={`${habit.emoji} ${habit.name}`}
+            selected={habit.id === selectedHabit}
             onPress={() => setSelectedHabit(habit.id)}
-            accessibilityRole="button"
-            accessibilityLabel={`${habit.emoji} ${habit.name}`}
-            accessibilityState={{ selected: habit.id === selectedHabit }}
-            style={[
-              styles.chip,
-              {
-                backgroundColor: habit.id === selectedHabit ? theme.accentSoft : theme.background,
-                borderColor: habit.id === selectedHabit ? theme.accent : 'transparent',
-              },
-            ]}>
-            <ThemedText type="small">
-              {habit.emoji} {habit.name}
-            </ThemedText>
-          </Pressable>
+          />
         ))}
       </View>
+
+      <ThemedText type="small" themeColor="textSecondary">
+        Call it something (optional)
+      </ThemedText>
+      <TextInput
+        value={challengeName}
+        onChangeText={setChallengeName}
+        placeholder="No-excuses week"
+        placeholderTextColor={theme.textSecondary}
+        style={[styles.input, { color: theme.text, backgroundColor: theme.backgroundSelected }]}
+      />
 
       <ThemedText type="small" themeColor="textSecondary">
         How many days?
       </ThemedText>
       <View style={styles.chips}>
         {LENGTH_OPTIONS.map((option) => (
-          <Pressable
+          <SelectChip
             key={option}
-            onPress={() => setLength(option)}
-            accessibilityRole="button"
+            label={`${option} days`}
             accessibilityLabel={`${option} day challenge`}
-            accessibilityState={{ selected: option === length }}
-            style={[
-              styles.chip,
-              {
-                backgroundColor: option === length ? theme.accentSoft : theme.background,
-                borderColor: option === length ? theme.accent : 'transparent',
-              },
-            ]}>
-            <ThemedText type="small">{option} days</ThemedText>
-          </Pressable>
+            selected={customDays.trim() === '' && option === length}
+            onPress={() => {
+              setLength(option);
+              setCustomDays('');
+            }}
+          />
         ))}
       </View>
+      <TextInput
+        value={customDays}
+        onChangeText={setCustomDays}
+        placeholder={`Or set your own — up to ${MAX_CHALLENGE_DAYS}`}
+        placeholderTextColor={theme.textSecondary}
+        keyboardType="number-pad"
+        accessibilityLabel="Custom challenge length in days"
+        style={[
+          styles.input,
+          {
+            color: theme.text,
+            backgroundColor: theme.backgroundSelected,
+            borderColor: customValid ? 'transparent' : theme.accent,
+          },
+        ]}
+      />
 
       <Pressable
-        onPress={() => onStart(selectedHabit, length)}
+        onPress={() => onStart(selectedHabit, effectiveLength, challengeName)}
+        disabled={!customValid}
         accessibilityRole="button"
+        accessibilityState={{ disabled: !customValid }}
         style={({ pressed }) => [
           styles.primary,
-          { backgroundColor: theme.accent },
+          { backgroundColor: customValid ? theme.accent : theme.disabledSurface },
           pressed && styles.pressed,
         ]}>
-        <ThemedText style={styles.primaryLabel}>Start {length}-day challenge</ThemedText>
+        <ThemedText
+          themeColor={customValid ? 'onAccent' : 'textSecondary'}
+          style={styles.primaryLabel}>
+          Start {effectiveLength}-day challenge
+        </ThemedText>
       </Pressable>
     </ThemedView>
   );
@@ -245,9 +274,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  boxDone: {
-    color: '#ffffff',
-  },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -259,6 +285,14 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.three,
     borderWidth: 1,
   },
+  input: {
+    height: 44,
+    borderRadius: Spacing.two,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    paddingHorizontal: Spacing.three,
+    fontSize: 16,
+  },
   primary: {
     marginTop: Spacing.two,
     paddingVertical: Spacing.three,
@@ -266,7 +300,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryLabel: {
-    color: '#ffffff',
     fontWeight: '700',
   },
   textButton: {

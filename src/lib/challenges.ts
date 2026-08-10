@@ -9,6 +9,8 @@ import { addDays, dayKey, isComplete, parseDayKey, type Habit } from '@/lib/habi
 export type Challenge = {
   id: string;
   habitId: string;
+  /** User-supplied title. Falls back to "<n>-day challenge" when blank. */
+  name: string;
   lengthDays: number;
   /** Day key of day one. */
   startedAt: string;
@@ -17,19 +19,42 @@ export type Challenge = {
 };
 
 export const DEFAULT_CHALLENGE_DAYS = 3;
+export const MIN_CHALLENGE_DAYS = 1;
+export const MAX_CHALLENGE_DAYS = 365;
+
+export function clampLength(days: number): number {
+  if (!Number.isFinite(days)) return DEFAULT_CHALLENGE_DAYS;
+  return Math.min(MAX_CHALLENGE_DAYS, Math.max(MIN_CHALLENGE_DAYS, Math.round(days)));
+}
 
 export function createChallenge(
   habitId: string,
   lengthDays: number = DEFAULT_CHALLENGE_DAYS,
+  name = '',
   today: Date = new Date(),
 ): Challenge {
+  const length = clampLength(lengthDays);
+
   return {
     id: `challenge-${Date.now()}`,
     habitId,
-    lengthDays,
+    name: name.trim() || `${length}-day challenge`,
+    lengthDays: length,
     startedAt: dayKey(today),
     completedAt: null,
   };
+}
+
+/** Older stored challenges predate `name`. */
+export function challengeTitle(challenge: Challenge): string {
+  return challenge.name?.trim() || `${challenge.lengthDays}-day challenge`;
+}
+
+/** Dev-only: move day one, so a long challenge can be tested without waiting. */
+export function shiftStart(challenge: Challenge, deltaDays: number): Challenge {
+  const start = addDays(parseDayKey(challenge.startedAt), deltaDays);
+
+  return { ...challenge, startedAt: dayKey(start), completedAt: null };
 }
 
 /** Day keys the challenge covers, oldest first. */
