@@ -7,20 +7,31 @@ import { Celebration, type CelebrationVariant } from '@/components/celebration';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { useHabits } from '@/hooks/use-habits';
+import { useAuth } from '@/hooks/use-auth';
+import { useHabits, type SyncStatus } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
 import { challengeTitle } from '@/lib/challenges';
 import { feedbackChallenge, feedbackComplete } from '@/lib/feedback';
 import { formatTime } from '@/lib/habits';
 import { notificationsSupported, scheduledCount } from '@/lib/notifications';
 
+const SYNC_LABEL: Record<SyncStatus, string> = {
+  off: 'Saved on this device only.',
+  idle: 'Everything is backed up.',
+  syncing: 'Syncing…',
+  pending: 'Changes saved here, waiting to upload.',
+  error: 'Offline — changes are saved here and will upload later.',
+};
+
 export default function SettingsScreen() {
   const router = useRouter();
   const safeArea = useSafeAreaInsets();
+  const { user } = useAuth();
   const {
     habits,
     challenge,
     settings,
+    syncStatus,
     updateSettings,
     resetToDemo,
     devShiftChallenge,
@@ -66,6 +77,27 @@ export default function SettingsScreen() {
         <View style={styles.header}>
           <ThemedText type="subtitle">Settings</ThemedText>
         </View>
+
+        <ThemedView type="backgroundElement" style={styles.card}>
+          <ThemedText type="smallBold">Account</ThemedText>
+
+          <Pressable
+            onPress={() => router.push('/sign-in')}
+            accessibilityRole="button"
+            accessibilityLabel={user ? `Signed in as ${user.email}` : 'Sign in'}
+            style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+            <ThemedText numberOfLines={1} style={styles.reminderName}>
+              {user ? user.email : 'Not signed in'}
+            </ThemedText>
+            <ThemedText type="smallBold" themeColor="accent">
+              {user ? 'Manage' : 'Sign in'}
+            </ThemedText>
+          </Pressable>
+
+          <ThemedText type="small" themeColor="textSecondary">
+            {SYNC_LABEL[syncStatus]}
+          </ThemedText>
+        </ThemedView>
 
         <ThemedView type="backgroundElement" style={styles.card}>
           <ThemedText type="smallBold">Reward feedback</ThemedText>

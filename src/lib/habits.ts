@@ -3,6 +3,8 @@
  * the screens stay dumb and the rules are easy to reason about.
  */
 
+import { newId } from '@/lib/ids';
+
 /**
  * `binary` habits are done-or-not once a day. `count` habits need `target`
  * repetitions in a day (drink water 4x). Both share one log shape so streaks,
@@ -20,6 +22,15 @@ export type Habit = {
   createdAt: string;
   /** Local `HH:MM` to nudge at, or null for no reminder on this habit. */
   reminderTime: string | null;
+  /**
+   * Tombstone: ISO instant the habit was deleted, or null while it's live.
+   *
+   * A deleted habit is kept rather than dropped from the array, because sync
+   * has to be able to tell "deleted here" from "not yet created here" — a hard
+   * delete is resurrected by the next pull from a device that still has it.
+   * `useHabits()` hides these, so screens never see one.
+   */
+  deletedAt: string | null;
   /** Day key -> repetitions logged that day. Absent means zero. */
   log: Record<string, number>;
 };
@@ -159,13 +170,14 @@ export function createHabit(
   today: Date = new Date(),
 ): Habit {
   return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: newId(),
     name: name.trim(),
     emoji,
     kind,
     target: kind === 'binary' ? 1 : Math.max(2, Math.round(target)),
     createdAt: dayKey(today),
     reminderTime: parseTime(reminderTime) ? reminderTime : null,
+    deletedAt: null,
     log: {},
   };
 }
@@ -215,14 +227,17 @@ export function seedHabits(today: Date = new Date()): Habit[] {
     },
   ];
 
-  return spec.map((habit, index) => ({
-    id: `seed-${index}`,
+  // Ids are generated rather than `seed-0`…`seed-3`: those are identical for
+  // every install, so two seeded accounts would collide on the primary key.
+  return spec.map((habit) => ({
+    id: newId(),
     name: habit.name,
     emoji: habit.emoji,
     kind: habit.kind,
     target: habit.target,
     createdAt: dayKey(addDays(today, -30)),
     reminderTime: habit.reminderTime,
+    deletedAt: null,
     log: Object.fromEntries(habit.daysAgo.map((offset) => [dayKey(addDays(today, -offset)), habit.target])),
   }));
 }
@@ -245,6 +260,7 @@ export function migrateV1(habits: HabitV1[]): Habit[] {
     target: 1,
     createdAt: habit.createdAt,
     reminderTime: null,
+    deletedAt: null,
     log: Object.fromEntries(habit.done.map((key) => [key, 1])),
   }));
 }

@@ -5,6 +5,7 @@
  */
 
 import { addDays, dayKey, isComplete, parseDayKey, type Habit } from '@/lib/habits';
+import { newId } from '@/lib/ids';
 
 export type Challenge = {
   id: string;
@@ -16,6 +17,8 @@ export type Challenge = {
   startedAt: string;
   /** Day key the final day was completed, or null while in progress. */
   completedAt: string | null;
+  /** Tombstone, as on `Habit` — see there for why a delete isn't a delete. */
+  deletedAt: string | null;
 };
 
 export const DEFAULT_CHALLENGE_DAYS = 3;
@@ -36,12 +39,13 @@ export function createChallenge(
   const length = clampLength(lengthDays);
 
   return {
-    id: `challenge-${Date.now()}`,
+    id: newId(),
     habitId,
     name: name.trim() || `${length}-day challenge`,
     lengthDays: length,
     startedAt: dayKey(today),
     completedAt: null,
+    deletedAt: null,
   };
 }
 

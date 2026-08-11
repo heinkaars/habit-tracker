@@ -18,7 +18,9 @@ It is deliberately structured around a product framework — keep changes inside
 | **Accessory** — logging and consistency | Insights screen, `components/consistency-chart.tsx` |
 | **Retention** — daily nudges | `lib/notifications.ts`, Settings screen |
 
-**Surface-area budget: 5–7 screens, and it currently sits at 6** (4 tabs + onboarding + the new-habit modal). Adding a seventh needs a deliberate decision; an eighth means merging something first. This is a product constraint, not an accident.
+**Surface-area budget: 5–7 screens, and it currently sits at 7** (4 tabs + onboarding + the new-habit modal + the sign-in modal). **The budget is now full** — an eighth screen means merging something first, not just deciding to add one.
+
+The seventh was spent deliberately on `sign-in.tsx`: signing in has its own error, validation and email-confirmation states, and folding those into Settings would have made the longest screen in the app longer still.
 
 Two things deliberately avoid spending that budget: `new-habit.tsx` doubles as the **edit** screen via `?id=`, and the developer tools live in a `__DEV__`-gated section of Settings rather than their own screen.
 
@@ -70,9 +72,55 @@ Screens are stateless with respect to habits — they read `useHabits()` and cal
 - `logStep()` wraps a count habit back to zero once it passes its target, so a mis-tap is always a few taps from correct rather than stuck.
 - **The challenge resolves exactly once**, on the tap that fulfils its final day — that transition is what fires the big celebration. Don't move fulfilment detection into render.
 
+### Supabase, auth and sync
+
+The database is a **sync target, not the source of truth**. AsyncStorage is what
+the screens render from; a check-in tap writes local state and returns in the
+same frame. Nothing in a mutation path may ever `await` the network — that is
+the core loop, and a spinner on a check-in destroys it.
+
+- **`src/lib/supabase.ts`** exports a client that is **`null` when
+  `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` are unset.** With
+  no credentials the entire remote layer sits out and the app behaves exactly as
+  it did before the database existed. Keep it that way — it's what keeps the web
+  preview and a fresh clone usable.
+- **`web.output` is `"static"`, so every route is prerendered in Node, where
+  there is no `window`.** AsyncStorage's web build reads `window.localStorage`
+  directly and supabase-js touches storage while *constructing* the client, so
+  handing it AsyncStorage during the prerender crashes the dev server on boot,
+  before any route renders. `supabase.ts` guards this with `prerendering`. Any
+  new module that touches storage at import time needs the same guard.
+- **`src/lib/sync.ts` merge rule: remote is authoritative except where a pending
+  local op exists.** `state.pending` holds exactly the edits this device hasn't
+  pushed; anything not in it has already been pushed, so a newer remote value
+  must have come from another device. That is what buys last-write-wins without
+  stamping every habit and every day-cell with its own `updatedAt` — and without
+  the log ever changing shape.
+- **Deletes are tombstones** (`deletedAt`), never array removals. A hard delete
+  has no `updated_at` for a delta pull to find, so the row is resurrected by the
+  next pull from a device that still has it. `useHabits()` filters tombstones
+  out, so screens never see one — but `rescheduleReminders` must be given the
+  filtered list or a deleted habit keeps notifying.
+- **A check-in of zero is stored as `count = 0`, not a deleted row**, for the
+  same reason: undoing a check-in has to be able to reach the other device.
+  Zero maps back to an absent key in the log, so `logStep` round-trips exactly.
+- **Ids are client-generated UUIDs** (`lib/ids.ts`). A habit created offline
+  needs its id immediately, and the old `seed-0` / `Date.now()` scheme collided
+  across users the moment rows shared a table.
+- **First contact with an account adopts or claims, never merges.** If the
+  account already has habits, the device adopts them wholesale; if it's empty,
+  the device pushes everything up. Merging the two grafts demo seed data onto a
+  real account.
+- **RLS is the access control**, not app code. Every table carries `user_id` and
+  one `auth.uid() = user_id` policy. The anon key ships inside the bundle by
+  design; it is the policies that keep one user out of another's rows. The
+  service role key bypasses RLS entirely and must never appear under `src/`.
+
+Setup lives in `.env.example`; the schema is one file, `supabase/migrations/0001_init.sql`.
+
 ### Storage migrations
 
-`use-habits.tsx` reads `habit-tracker.state.v2`, falling back to the v1 key and running `migrateV1()`. Users have real history on device, so reseeding silently destroys it. Two cases:
+`use-habits.tsx` reads `habit-tracker.state.v3`, falling back to v2 (`migrateV2()`, which re-issues every id as a UUID and remaps the challenge's `habitId` through the same table) and then to v1 (`migrateV1()`). Old keys are left in place rather than deleted — users have real history on device, and a bad migration should be recoverable. Reseeding silently destroys it. Two cases:
 
 - **Additive fields** (a new nullable property) are filled in by `normalize()` on read. Nothing already stored is reinterpreted, so the key stays.
 - **Anything that reinterprets existing data** needs a new key plus another forward-read, like v1 → v2 did.
