@@ -24,6 +24,10 @@ type AuthContextValue = {
   signUp: (email: string, password: string) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
+  /** Emails a six-digit recovery code. */
+  requestPasswordReset: (email: string) => Promise<AuthResult>;
+  /** Exchanges that code for a session, then sets the new password. */
+  resetPassword: (email: string, code: string, password: string) => Promise<AuthResult>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -93,6 +97,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
   }, []);
 
+  /**
+   * Sends the recovery email.
+   *
+   * No `redirectTo`: the email carries a six-digit code rather than a link,
+   * because a link needs a custom URL scheme that Expo Go can't receive. The
+   * code path works the same on device, in Expo Go, and on web.
+   *
+   * Supabase deliberately succeeds whether or not the address has an account,
+   * so this cannot be used to discover who is registered. Errors here are real
+   * failures — usually the per-hour rate limit — and are worth showing.
+   */
+  const requestPasswordReset = useCallback(async (email: string): Promise<AuthResult> => {
+    if (!supabase) return NOT_CONFIGURED;
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+
+    return { error: error ? error.message : null };
+  }, []);
+
+  /**
+   * Verifying the code returns a session, which is what authorises the password
+   * change — `updateUser` acts on the signed-in user, so the two calls have to
+   * happen in this order and the user ends up signed in on success.
+   */
+  const resetPassword = useCallback(
+    async (email: string, code: string, password: string): Promise<AuthResult> => {
+      if (!supabase) return NOT_CONFIGURED;
+
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: code.trim(),
+        type: 'recovery',
+      });
+
+      if (verifyError) return { error: verifyError.message };
+
+      const { error } = await supabase.auth.updateUser({ password });
+
+      return { error: error ? error.message : null };
+    },
+    [],
+  );
+
   const value = useMemo(
     () => ({
       session,
@@ -102,8 +149,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signIn,
       signOut,
+      requestPasswordReset,
+      resetPassword,
     }),
-    [session, loading, signUp, signIn, signOut],
+    [session, loading, signUp, signIn, signOut, requestPasswordReset, resetPassword],
   );
 
   return <AuthContext value={value}>{children}</AuthContext>;

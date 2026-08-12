@@ -9,7 +9,16 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 
-type Mode = 'signIn' | 'signUp';
+type Mode = 'signIn' | 'signUp' | 'reset';
+
+/**
+ * Recovery is two steps: ask for the code, then redeem it. Kept as a stage
+ * rather than a separate route because the screen budget is full, and because
+ * the email address entered in step one is needed again in step two.
+ */
+type ResetStage = 'request' | 'confirm';
+
+const RESET_CODE_LENGTH = 6;
 
 /**
  * The seventh screen, and a deliberate spend of the 5–7 budget: signing in is a
@@ -19,14 +28,27 @@ type Mode = 'signIn' | 'signUp';
 export default function SignInScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { configured, user, signIn, signUp, signOut } = useAuth();
+  const { configured, user, signIn, signUp, signOut, requestPasswordReset, resetPassword } =
+    useAuth();
 
   const [mode, setMode] = useState<Mode>('signIn');
+  const [resetStage, setResetStage] = useState<ResetStage>('request');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  /** Switching modes must not carry an old error or notice into the new one. */
+  const goTo = useCallback((next: Mode) => {
+    setMode(next);
+    setResetStage('request');
+    setError(null);
+    setNotice(null);
+    setCode('');
+    setPassword('');
+  }, []);
 
   /**
    * Leaving this screen has to work even when nothing is underneath it.
@@ -48,7 +70,15 @@ export default function SignInScreen() {
   // Supabase's own default minimum. Checking it here turns a round-trip and a
   // raw API error message into an inline hint.
   const passwordValid = password.length >= 6;
-  const canSubmit = configured && emailValid && passwordValid && !busy;
+  const codeValid = new RegExp(`^\\d{${RESET_CODE_LENGTH}}$`).test(code.trim());
+
+  const canSubmit = (() => {
+    if (!configured || busy) return false;
+    if (mode === 'reset') {
+      return resetStage === 'request' ? emailValid : codeValid && passwordValid;
+    }
+    return emailValid && passwordValid;
+  })();
 
   async function submit() {
     if (!canSubmit) return;
@@ -56,6 +86,35 @@ export default function SignInScreen() {
     setBusy(true);
     setError(null);
     setNotice(null);
+
+    if (mode === 'reset') {
+      const result =
+        resetStage === 'request'
+          ? await requestPasswordReset(email)
+          : await resetPassword(email, code, password);
+
+      setBusy(false);
+
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      if (resetStage === 'request') {
+        // Deliberately says nothing about whether the address has an account —
+        // a different message for "no such user" would turn this screen into a
+        // way to find out who is registered.
+        setNotice(
+          `If ${email.trim()} has an account, a ${RESET_CODE_LENGTH}-digit code is on its way. Enter it below.`,
+        );
+        setResetStage('confirm');
+        return;
+      }
+
+      // Redeeming the code signs the user in, so there's nothing left to do here.
+      dismiss();
+      return;
+    }
 
     const result = mode === 'signUp' ? await signUp(email, password) : await signIn(email, password);
 
@@ -130,6 +189,121 @@ export default function SignInScreen() {
     );
   }
 
+  if (mode === 'reset') {
+    return (
+      <ThemedView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <ThemedView type="backgroundElement" style={styles.card}>
+            <ThemedText type="smallBold">Reset your password</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              {resetStage === 'request'
+                ? `We'll email you a ${RESET_CODE_LENGTH}-digit code. Enter it here to choose a new password — there's no link to click, so this works the same on your phone as in a browser.`
+                : 'Enter the code from the email, then pick a new password.'}
+            </ThemedText>
+
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              placeholderTextColor={theme.textSecondary}
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              accessibilityLabel="Email"
+              // Locked once the code is out: changing it here would silently
+              // verify against a different account than the one emailed.
+              editable={resetStage === 'request'}
+              style={[
+                styles.input,
+                {
+                  color: resetStage === 'request' ? theme.text : theme.textSecondary,
+                  backgroundColor: theme.backgroundSelected,
+                },
+              ]}
+            />
+
+            {resetStage === 'confirm' && (
+              <>
+                <TextInput
+                  value={code}
+                  onChangeText={setCode}
+                  placeholder={'0'.repeat(RESET_CODE_LENGTH)}
+                  placeholderTextColor={theme.textSecondary}
+                  keyboardType="number-pad"
+                  autoComplete="one-time-code"
+                  maxLength={RESET_CODE_LENGTH}
+                  accessibilityLabel="Reset code"
+                  style={[
+                    styles.input,
+                    { color: theme.text, backgroundColor: theme.backgroundSelected },
+                  ]}
+                />
+
+                <TextInput
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="New password"
+                  placeholderTextColor={theme.textSecondary}
+                  autoCapitalize="none"
+                  autoComplete="new-password"
+                  secureTextEntry
+                  accessibilityLabel="New password"
+                  onSubmitEditing={submit}
+                  style={[
+                    styles.input,
+                    { color: theme.text, backgroundColor: theme.backgroundSelected },
+                  ]}
+                />
+
+                {password.length > 0 && !passwordValid && (
+                  <ThemedText type="small" themeColor="accent">
+                    Passwords need at least 6 characters.
+                  </ThemedText>
+                )}
+              </>
+            )}
+
+            {error && (
+              <ThemedText type="small" themeColor="accent">
+                {error}
+              </ThemedText>
+            )}
+
+            {notice && (
+              <ThemedView type="accentSoft" style={[styles.notice, { borderColor: theme.accent }]}>
+                <ThemedText type="small">{notice}</ThemedText>
+              </ThemedView>
+            )}
+          </ThemedView>
+
+          <Pressable
+            onPress={submit}
+            disabled={!canSubmit}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canSubmit }}
+            style={({ pressed }) => [
+              styles.primary,
+              { backgroundColor: canSubmit ? theme.accent : theme.disabledSurface },
+              pressed && styles.pressed,
+            ]}>
+            {busy ? (
+              <ActivityIndicator color={canSubmit ? theme.onAccent : theme.textSecondary} />
+            ) : (
+              <ThemedText
+                themeColor={canSubmit ? 'onAccent' : 'textSecondary'}
+                style={styles.primaryLabel}>
+                {resetStage === 'request' ? 'Send me a code' : 'Set new password'}
+              </ThemedText>
+            )}
+          </Pressable>
+
+          <DismissLink onPress={() => goTo('signIn')} label="Back to sign in" />
+          <DismissLink onPress={dismiss} />
+        </ScrollView>
+      </ThemedView>
+    );
+  }
+
   return (
     <ThemedView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -138,18 +312,12 @@ export default function SignInScreen() {
             <SelectChip
               label="Sign in"
               selected={mode === 'signIn'}
-              onPress={() => {
-                setMode('signIn');
-                setError(null);
-              }}
+              onPress={() => goTo('signIn')}
             />
             <SelectChip
               label="Create account"
               selected={mode === 'signUp'}
-              onPress={() => {
-                setMode('signUp');
-                setError(null);
-              }}
+              onPress={() => goTo('signUp')}
             />
           </View>
 
@@ -188,6 +356,18 @@ export default function SignInScreen() {
             <ThemedText type="small" themeColor="accent">
               Passwords need at least 6 characters.
             </ThemedText>
+          )}
+
+          {mode === 'signIn' && (
+            <Pressable
+              onPress={() => goTo('reset')}
+              accessibilityRole="button"
+              accessibilityLabel="Forgot password"
+              style={({ pressed }) => pressed && styles.pressed}>
+              <ThemedText type="small" themeColor="accent">
+                Forgot password?
+              </ThemedText>
+            </Pressable>
           )}
 
           {error && (
