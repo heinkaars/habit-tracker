@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ConsistencyChart, type ChartDay } from '@/components/consistency-chart';
+import { ReflectionCard } from '@/components/reflection-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -122,6 +123,10 @@ export default function InsightsScreen() {
           </ThemedText>
         ) : (
           <>
+            {/* Above the chart: the written read on last week frames the
+                numbers below it. Renders nothing when absent. */}
+            <ReflectionCard />
+
             <ThemedView type="backgroundElement" style={styles.card}>
               <ThemedText type="smallBold">Last {CHART_DAYS} days</ThemedText>
               <ConsistencyChart days={chartDays} />

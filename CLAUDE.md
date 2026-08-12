@@ -42,6 +42,7 @@ npm run web        # dev server + web preview (also serves the native manifest o
 npm run ios        # dev server, opens iOS target
 npm run android    # dev server, opens Android target
 npm run lint       # eslint via expo lint
+npm run test:parity # cross-checks src/lib/habits.ts against the Edge Function copy
 npx tsc --noEmit   # typecheck — not part of lint, run it separately
 npx expo-doctor    # dependency/config health check
 ```
@@ -117,6 +118,51 @@ the core loop, and a spinner on a check-in destroys it.
   service role key bypasses RLS entirely and must never appear under `src/`.
 
 Setup lives in `.env.example`; the schema is one file, `supabase/migrations/0001_init.sql`.
+
+### AI coaching and reflections
+
+Two features, both **Claude Sonnet 5 via a Supabase Edge Function**, never from
+the app: `coach` (a daily nudge on Today) and `reflect` (a weekly report on
+Insights). Neither spends a screen — they render as cards inside surfaces that
+already exist, because the budget is full.
+
+- **`ANTHROPIC_API_KEY` is an Edge Function secret and must never become an
+  `EXPO_PUBLIC_` variable.** Anything `EXPO_PUBLIC_` is inlined into the bundle
+  and readable by anyone who downloads the app. The whole reason these features
+  are server-side is to keep that key off the device — the anon key is
+  publishable, this one is not.
+- **The functions authenticate as the caller, not the service role.** They
+  forward the request's JWT into `createClient`, so RLS filters every query they
+  make. A bug in a function still cannot read another user's habits, because the
+  database won't return them.
+- **Arithmetic in code, judgment in Claude.** `_shared/stats.ts` computes every
+  streak, rate, and total; the model only ever sees finished numbers and is told
+  not to derive new ones. A model counting check-in rows is slower, costlier,
+  and occasionally wrong.
+- **`_shared/stats.ts` is a second copy of the rules in `src/lib/habits.ts`** —
+  Edge Functions run on Deno and `habits.ts` reaches `expo-crypto`, which has no
+  Deno build. The copies are pinned by **`npm run test:parity`**, which runs both
+  over identical randomised histories and fails if they disagree. Run it after
+  touching either file — it is the only thing stopping the two from drifting.
+  (`scripts/parity/` stubs `expo-crypto` so the app module imports under Node.)
+- **The client sends its own `today`.** Functions run in UTC, so they must never
+  decide what the user's local day is — for anyone east of UTC in the evening
+  the server's date is already tomorrow.
+- **Throttling is a unique constraint, not app code.** One coach note per
+  `(user, day)`, one reflection per `(user, period, period_start)`. A double-tap
+  or two devices racing therefore cannot produce two billed model calls; the
+  loser re-reads the winner's row.
+- **Cache before generate.** Both functions return the stored row on a hit and
+  only call Claude on a miss, so reopening a screen costs an indexed SELECT.
+- **Reflections cover the last *completed* period**, not a trailing window — a
+  moving window would make the throttle key change daily and let one "weekly"
+  report generate every day.
+- Nothing here may be awaited from a check-in. `src/lib/coach.ts` returns `null`
+  on every failure rather than throwing, so with no project, no account, or no
+  network the cards simply don't render and the app behaves as it did before.
+
+Deploy with `npx supabase functions deploy coach reflect`; set the key with
+`npx supabase secrets set ANTHROPIC_API_KEY=...`. Both need a linked project.
 
 ### Storage migrations
 

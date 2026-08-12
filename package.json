@@ -36,6 +36,7 @@
     "@types/react": "~19.1.10",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~10.0.0",
+    "tsx": "^4.23.12",
     "typescript": "~5.9.2"
   },
   "comments": {
@@ -52,7 +53,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "web:preview": "EXPO_NO_DEPENDENCY_VALIDATION=1 expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:parity": "cd scripts/parity && tsx stats-parity.test.mts"
   },
   "private": true
 }

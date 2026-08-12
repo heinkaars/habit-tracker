@@ -66,6 +66,38 @@ export type ChallengeRow = {
   updated_at: string;
 };
 
+/**
+ * AI output caches (`0002_ai_coaching.sql`). The app only ever reads these and
+ * updates `dismissed_at`; the rows themselves are written by the Edge
+ * Functions, which is why `id` and `created_at` can carry database defaults
+ * despite the `Insert`-equals-`Row` shape above.
+ */
+export type CoachMessageRow = {
+  id: string;
+  user_id: string;
+  day: DayKey;
+  headline: string;
+  body: string;
+  focus_habit_id: string | null;
+  suggestion: string | null;
+  dismissed_at: string | null;
+  created_at: string;
+};
+
+export type ReflectionRow = {
+  id: string;
+  user_id: string;
+  period: 'week' | 'month';
+  period_start: DayKey;
+  period_end: DayKey;
+  headline: string;
+  summary: string;
+  wins: string[];
+  watch_outs: string[];
+  suggestion: string | null;
+  created_at: string;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -73,6 +105,8 @@ export type Database = {
       habits: Table<HabitRow>;
       check_ins: Table<CheckInRow>;
       challenges: Table<ChallengeRow>;
+      coach_messages: Table<CoachMessageRow>;
+      reflections: Table<ReflectionRow>;
     };
     Views: Record<never, never>;
     Functions: Record<never, never>;

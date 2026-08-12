@@ -4,6 +4,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Celebration, type CelebrationVariant } from '@/components/celebration';
+import { CoachCard } from '@/components/coach-card';
 import { HabitRow } from '@/components/habit-row';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -122,6 +123,10 @@ export default function TodayScreen() {
             </Pressable>
           </Link>
         )}
+
+        {/* Below the challenge banner: the challenge is a commitment the user
+            made, the note is advice about it. Renders nothing when absent. */}
+        <CoachCard />
 
         {loading ? (
           <ThemedText type="small" themeColor="textSecondary">
