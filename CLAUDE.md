@@ -217,6 +217,17 @@ that a dead sweep is invisible from the app. Check both when it misbehaves:
   instead. Every query it makes is still scoped to one `user_id` explicitly
   (see `getOrGenerateCoachNote`) — the elevated client widens reach across
   accounts, not what any single call can touch.
+- **It resolves that key across both of Supabase's key systems**, preferring
+  the newer `SUPABASE_SECRET_KEYS` (a JSON dictionary of `sb_secret_...` keys,
+  `default` being the project's own) and falling back to the legacy
+  `SUPABASE_SERVICE_ROLE_KEY` JWT. Legacy keys are deprecated end of 2026 and
+  are revoked *wholesale* when they're switched off in the dashboard, so a
+  function that only reads the legacy variable dies silently on that switch —
+  silently because the on-demand path in `coach` covers for a dead sweep. The
+  200 body reports `keySource` (`secret_keys` or `legacy_jwt`, never the key)
+  so which system is actually in use is visible from the scheduler's log
+  *before* the switch rather than after. Don't drop the fallback until that
+  reads `secret_keys`.
 - **`verify_jwt = false` in `config.toml` for this function only.** Supabase's
   Edge Function gateway requires a valid JWT or project key in `Authorization`
   before a request reaches function code at all, by default — a cron job has
