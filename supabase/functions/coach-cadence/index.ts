@@ -26,7 +26,12 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 import { RefusalError } from '../_shared/claude.ts';
 import { getOrGenerateCoachNote } from '../_shared/coach-generate.ts';
+import { requireEnv } from '../_shared/env.ts';
 import { localNow, type DayKey } from '../_shared/stats.ts';
+
+// Read at load. `CRON_SECRET` deliberately is not — see `env.ts` for why an
+// unauthenticated probe must get a 401 rather than a 500.
+const SUPABASE_URL = requireEnv('SUPABASE_URL');
 
 /** Local hour each user's note is generated for. */
 const TARGET_HOUR = 7;
@@ -121,7 +126,7 @@ Deno.serve(async (req: Request) => {
     return reply({ error: (cause as Error).message }, 500);
   }
 
-  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, key);
+  const supabase = createClient(SUPABASE_URL, key);
 
   const { data: profiles, error } = await supabase
     .from('profiles')
@@ -138,6 +143,11 @@ Deno.serve(async (req: Request) => {
   let generated = 0;
   let skipped = 0;
   let failed = 0;
+  // Reached at their target hour but produced no note: too little history to
+  // coach on, or a spend cap declined the claim (`claim_ai_generation`). Not a
+  // failure — but worth its own number, because a sweep that suddenly stops
+  // generating for everyone is the signal that a cap is engaged.
+  let declined = 0;
 
   for (const profile of profiles ?? []) {
     let hour: number;
@@ -160,8 +170,14 @@ Deno.serve(async (req: Request) => {
       // Already-cached is the normal case on a second sweep within the same
       // target hour (a retry, an overlapping run) — getOrGenerateCoachNote's
       // cache check makes that a cheap read, not a second generation.
-      const { cached } = await getOrGenerateCoachNote(supabase, profile.id, day);
-      if (!cached) generated += 1;
+      const { note, cached } = await getOrGenerateCoachNote(supabase, profile.id, day, {
+        elevated: true,
+      });
+      if (note && !cached) {
+        generated += 1;
+      } else if (!note) {
+        declined += 1;
+      }
     } catch (cause) {
       // A refusal or a transient failure for one user shouldn't stop the
       // sweep from reaching everyone else.
@@ -174,5 +190,8 @@ Deno.serve(async (req: Request) => {
   // system actually resolved, and the only reader is whoever holds CRON_SECRET.
   // Once this reads `secret_keys`, turning legacy keys off is safe for this
   // function. It names the source, never the key.
-  return reply({ total: profiles?.length ?? 0, generated, skipped, failed, keySource }, 200);
+  return reply(
+    { total: profiles?.length ?? 0, generated, skipped, declined, failed, keySource },
+    200,
+  );
 });

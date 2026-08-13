@@ -7,7 +7,7 @@
  */
 
 import { generateJson, RefusalError } from '../_shared/claude.ts';
-import { clientForRequest, json, preflight, safeError } from '../_shared/http.ts';
+import { clientForRequest, respond } from '../_shared/http.ts';
 import {
   addDays,
   buildSnapshot,
@@ -86,7 +86,13 @@ function toReflection(row: ReflectionRow) {
 
 const SELECT = 'period, period_start, period_end, headline, summary, wins, watch_outs, suggestion';
 
+/** Same reasoning as `coach-generate.ts` — see MAX_HABITS / MIN_ACTIVE_DAYS there. */
+const MAX_HABITS = 100;
+const MIN_ACTIVE_DAYS = 3;
+
 Deno.serve(async (req: Request) => {
+  const { json, preflight, error: fail } = respond(req);
+
   if (req.method === 'OPTIONS') return preflight();
   if (req.method !== 'POST') return json({ error: 'Use POST.' }, 405);
 
@@ -136,7 +142,9 @@ Deno.serve(async (req: Request) => {
       .from('habits')
       .select('id, name, emoji, kind, target, created_at, reminder_time, deleted_at')
       .eq('user_id', userId)
-      .is('deleted_at', null),
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(MAX_HABITS),
     supabase
       .from('check_ins')
       .select('habit_id, day, count')
@@ -147,17 +155,33 @@ Deno.serve(async (req: Request) => {
   ]);
 
   const error = habitsRes.error ?? checkInsRes.error;
-  if (error) return safeError(error, 500, 'reflect');
+  if (error) return fail(error, 500, 'reflect');
 
   const habits = (habitsRes.data ?? []) as HabitRow[];
   if (habits.length === 0) return json({ reflection: null });
 
   const checkIns = (checkInsRes.data ?? []) as CheckInRow[];
-  // A period with no activity at all produces a report that says nothing worth
+  // A period with too little activity produces a report that says nothing worth
   // a model call — and reads as scolding when the person simply wasn't using
   // the app that week. Judged on the period itself, not the wider stats window.
-  const inPeriod = checkIns.filter((row) => row.day >= start && row.day <= end);
-  if (inPeriod.every((row) => row.count <= 0)) return json({ reflection: null });
+  //
+  // It doubles as the spend guard that `MIN_ACTIVE_DAYS` describes in
+  // `coach-generate.ts`: a scripted account is a fresh throttle quota, and this
+  // is what stops one habit row buying a billed call.
+  const activeDays = new Set(
+    checkIns.filter((row) => row.count > 0 && row.day >= start && row.day <= end).map((row) => row.day),
+  );
+  if (activeDays.size < MIN_ACTIVE_DAYS) return json({ reflection: null });
+
+  // Reserve before spending — see the same call in `coach-generate.ts`.
+  // No user id: this path always has a session, and the function derives
+  // identity from `auth.uid()` so it cannot name another account.
+  const { data: claimed, error: claimError } = await supabase.rpc('claim_ai_generation', {
+    p_kind: 'reflect',
+  });
+
+  if (claimError) return fail(claimError, 500, 'reflect');
+  if (claimed !== true) return json({ reflection: null });
 
   const days = period === 'week' ? 7 : 30;
   // Stats are computed as at the last day of the period, not today, so the
@@ -174,7 +198,7 @@ Deno.serve(async (req: Request) => {
       maxTokens: 3000,
     });
   } catch (cause) {
-    return safeError(cause, cause instanceof RefusalError ? 422 : 502, 'reflect');
+    return fail(cause, cause instanceof RefusalError ? 422 : 502, 'reflect');
   }
 
   const row = {
@@ -201,7 +225,7 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (winner) return json({ reflection: toReflection(winner as ReflectionRow), cached: true });
-    return safeError(insertError, 500, 'reflect');
+    return fail(insertError, 500, 'reflect');
   }
 
   return json({

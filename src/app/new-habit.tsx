@@ -101,6 +101,12 @@ function HabitForm({ existing }: { existing?: Habit }) {
             returnKeyType="done"
             onSubmitEditing={submit}
             autoFocus={!editing}
+            // Matches the `habits_name_length` constraint. The constraint is the
+            // control — PostgREST, not this screen, is the real entry point, and
+            // a habit name is copied verbatim into a billed model call. This is
+            // only here so the UI agrees with it instead of surfacing a raw
+            // Postgres error on save.
+            maxLength={80}
             style={[styles.input, { color: theme.text, backgroundColor: theme.backgroundSelected }]}
           />
         </ThemedView>

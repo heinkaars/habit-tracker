@@ -67,9 +67,12 @@ export default function SignInScreen() {
   }, [router]);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-  // Supabase's own default minimum. Checking it here turns a round-trip and a
-  // raw API error message into an inline hint.
-  const passwordValid = password.length >= 6;
+  // Mirrors `minimum_password_length` in supabase/config.toml. Checking it here
+  // turns a round-trip and a raw API error message into an inline hint — so the
+  // two have to move together, or a password the user is told is fine comes back
+  // rejected. The character-class rule is left to the server: restating it here
+  // would only duplicate a regex that Supabase already applies.
+  const passwordValid = password.length >= 10;
   const codeValid = new RegExp(`^\\d{${RESET_CODE_LENGTH}}$`).test(code.trim());
 
   const canSubmit = (() => {
@@ -257,7 +260,7 @@ export default function SignInScreen() {
 
                 {password.length > 0 && !passwordValid && (
                   <ThemedText type="small" themeColor="accent">
-                    Passwords need at least 6 characters.
+                    Passwords need at least 10 characters, with upper and lower case letters and a digit.
                   </ThemedText>
                 )}
               </>
@@ -354,7 +357,7 @@ export default function SignInScreen() {
 
           {password.length > 0 && !passwordValid && (
             <ThemedText type="small" themeColor="accent">
-              Passwords need at least 6 characters.
+              Passwords need at least 10 characters, with upper and lower case letters and a digit.
             </ThemedText>
           )}
 

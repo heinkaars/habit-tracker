@@ -179,10 +179,17 @@ enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
+minimum_password_length = 10
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
-password_requirements = ""
+#
+# `lower_upper_letters_digits` rejects the single-character-class passwords that
+# dominate credential dumps without demanding symbols, which mostly produces
+# "Password1!". Mirror this in the dashboard — these values govern local
+# development only, and the hosted project is what users actually sign up
+# against. `sign-in.tsx` validates the same minimum so a valid password isn't
+# rejected after a round trip.
+password_requirements = "lower_upper_letters_digits"
 
 # Configure passkey sign-ins.
 # [auth.passkey]
@@ -211,10 +218,29 @@ token_verifications = 30
 web3 = 30
 
 # Configure one of the supported captcha providers: `hcaptcha`, `turnstile`.
+#
+# DELIBERATELY OFF, and it is not a one-line change. Captcha would be the
+# strongest control on AI spend — the model-call throttle is keyed
+# `(user_id, day)`, so every account is a fresh quota and account creation is
+# the amplification path (see `0007_bound_ai_spend.sql`) — but turning it on
+# here or in the dashboard **breaks sign-up immediately**. Supabase then
+# requires a `captchaToken` on every signUp/signIn, and `use-auth.tsx` doesn't
+# send one; there is no widget in this app, and Turnstile on React Native needs
+# a WebView rather than a script tag. Enabling it is a client feature, not a
+# config flip.
+#
+# What carries that load instead, until someone does that work:
+#   * `enable_confirmations` above — every account now needs a real, deliverable
+#     mailbox before it can sign in, which is what makes bulk creation cost
+#     something without any client change.
+#   * `sign_in_sign_ups` in [auth.rate_limit] — per-IP signup ceiling.
+#   * The per-user and global caps in `0007_bound_ai_spend.sql` — the backstop
+#     that bounds the bill if the two above are beaten.
+#
 # [auth.captcha]
 # enabled = true
-# provider = "hcaptcha"
-# secret = ""
+# provider = "turnstile"
+# secret = "env(SUPABASE_AUTH_CAPTCHA_SECRET)"
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
@@ -223,15 +249,22 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# `use-auth.tsx` already handles the resulting `needsConfirmation` state.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
-max_frequency = "1s"
+max_frequency = "60s"
 # Number of characters used in the email OTP.
 otp_length = 6
-# Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+# Number of seconds before the email OTP expires.
+#
+# A 6-digit code is a 10^6 keyspace, and redeeming one yields a *session* —
+# `resetPassword` in `use-auth.tsx` signs the user in and then sets the password.
+# `token_verifications` below caps attempts per IP, which makes a single-host
+# attack hopeless but does nothing against a distributed one; the validity
+# window is what bounds that. An hour was six times longer than it needed to be.
+otp_expiry = 600
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]

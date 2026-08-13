@@ -47,6 +47,16 @@ export const supabase: Client | null =
         auth: {
           // Undefined lets supabase-js fall back to its in-memory store, which
           // is the right lifetime for a render that ends with the response.
+          //
+          // Otherwise this is AsyncStorage — `window.localStorage` on web, so
+          // the refresh token is readable by any script on the origin. httpOnly
+          // cookies would need `@supabase/ssr` and a server session route, and
+          // `web.output` is "static": there is no server to host one. Accepted
+          // because the XSS surface is empty by construction — everything
+          // renders through <ThemedText> → RN <Text>, which escapes, and there
+          // is no dangerouslySetInnerHTML, no eval, and no HTML rendering path
+          // anywhere under src/. That property is what makes this safe, so
+          // treat any change introducing raw HTML on web as reopening it.
           storage: prerendering ? undefined : AsyncStorage,
           persistSession: !prerendering,
           autoRefreshToken: !prerendering,

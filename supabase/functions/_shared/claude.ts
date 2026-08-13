@@ -9,21 +9,19 @@
 
 import Anthropic from 'npm:@anthropic-ai/sdk@0.116.0';
 
+import { requireEnv } from './env.ts';
+
 /** Requested explicitly. Sonnet 5 is strong enough for this and much cheaper than Opus. */
 const MODEL = 'claude-sonnet-5';
+
+// Read at load. Lazily discovering a missing key meant the failure surfaced as
+// an intermittent 502 that the client swallows into `null` — see `env.ts`.
+const API_KEY = requireEnv('ANTHROPIC_API_KEY');
 
 let client: Anthropic | null = null;
 
 function anthropic(): Anthropic {
-  if (!client) {
-    const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-    if (!apiKey) {
-      throw new Error(
-        'ANTHROPIC_API_KEY is not set. Run: supabase secrets set ANTHROPIC_API_KEY=sk-ant-...',
-      );
-    }
-    client = new Anthropic({ apiKey });
-  }
+  client ??= new Anthropic({ apiKey: API_KEY });
 
   return client;
 }

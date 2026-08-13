@@ -116,6 +116,16 @@ the core loop, and a spinner on a check-in destroys it.
   one `auth.uid() = user_id` policy. The anon key ships inside the bundle by
   design; it is the policies that keep one user out of another's rows. The
   service role key bypasses RLS entirely and must never appear under `src/`.
+- **Auth policy lives in the dashboard, and `config.toml` only mirrors it.**
+  The committed values are 10-character passwords with
+  `lower_upper_letters_digits`, email confirmations on, and a **600-second** OTP
+  expiry. That last one matters: the recovery code is six digits, and redeeming
+  one yields a *session* (`resetPassword` signs the user in, then sets the
+  password). Per-IP verification limits make a single-host attack hopeless but
+  do nothing against a distributed one — the validity window is what bounds
+  that. `sign-in.tsx` restates the length minimum for inline validation, so the
+  two have to move together or a password the user is told is fine comes back
+  rejected.
 
 Setup lives in `.env.example`; the schema is one file, `supabase/migrations/0001_init.sql`.
 
@@ -164,14 +174,66 @@ already exist, because the budget is full.
   throttle and re-bill in a loop, which is why the client-side `devClear*`
   helpers are gone — force a regeneration from the dashboard instead. INSERT
   deliberately stays: `coach` and `reflect` write as the calling user.
+- **Three things bound spend, and they guard different axes.** The throttle
+  caps *how many* calls an account makes; it did nothing about how large each
+  one was, or how many accounts existed. `0007_bound_ai_spend.sql` closes both.
+  - **Size.** `habits.name`/`challenges.name` are capped at 80 characters and
+    `habits.emoji` at 64, with a trigger capping active habits at 100 per
+    account; both AI functions additionally `.limit(100)` the habits query.
+    Every habit's name and emoji is copied verbatim into the snapshot the model
+    reads, so an unbounded column was an unbounded billed input — 400 habits
+    with 20 KB names is ~2M tokens inside one *legitimate* cache miss. The
+    constraint is the control, not the `maxLength` on the TextInput: PostgREST
+    is the real entry point, and RLS happily lets a user write their own rows.
+  - **Accounts.** The throttle key is `(user_id, day)`, so a fresh account is a
+    fresh quota and free signup was the amplification path. **Email
+    confirmation is what makes an account cost something** — every account now
+    needs a real, deliverable mailbox before it can sign in. Behind it, both
+    functions require `MIN_ACTIVE_DAYS` (3) of real check-ins before
+    generating; a scripted account can insert check-in rows too, so that raises
+    the cost rather than closing the door. **Captcha would be the strongest
+    control here and is deliberately still off** — enabling it makes Supabase
+    demand a `captchaToken` that `use-auth.tsx` doesn't send, so it breaks
+    sign-up until someone builds the widget (a WebView on native). See the note
+    in `config.toml`; don't flip it without the client work.
+  - **A ceiling.** A claim is reserved *before* the call is made (a failed call
+    may still bill) and refused past 25/user/day or 500/project/day — tune via
+    `ai_daily_user_limit()` / `ai_daily_global_limit()`. Two functions, not
+    one: `claim_ai_generation(kind)` takes no user id and derives identity from
+    `auth.uid()` (granted to `authenticated`), while
+    `claim_ai_generation_for(user_id, kind)` takes one and is granted only to
+    `service_role`, because `coach-cadence` has no session. Keep that split —
+    a single function has to skip its own identity check when `auth.uid()` is
+    null, which makes "no identity" mean "trust the parameter".
+    **The global cap is a deliberate tradeoff: it converts unbounded spend into
+    a denial of service that anyone with enough accounts can trigger.** That is
+    the better failure of the two, but with captcha off it is the *only* thing
+    bounding the bill, so raise it deliberately as real usage grows rather than
+    discovering it as an outage. A refused claim degrades exactly like no
+    network: no card, no error. `coach-cadence` reports `declined` so a cap
+    engaging is visible in the run log rather than silent.
 - **Cache before generate.** Both functions return the stored row on a hit and
   only call Claude on a miss, so reopening a screen costs an indexed SELECT.
+  The order inside a miss is load-bearing: cache → history threshold → claim →
+  model → store. Claiming after the model call would bill without accounting.
 - **Reflections cover the last *completed* period**, not a trailing window — a
   moving window would make the throttle key change daily and let one "weekly"
   report generate every day.
 - Nothing here may be awaited from a check-in. `src/lib/coach.ts` returns `null`
   on every failure rather than throwing, so with no project, no account, or no
   network the cards simply don't render and the app behaves as it did before.
+
+- **Required secrets are read at module load** (`_shared/env.ts`), so a deploy
+  that forgot one fails in the deploy log. Lazily discovering it meant a 502
+  that `lib/coach.ts` swallows into `null` — a card that silently doesn't
+  render, which is this project's recurring failure mode. `CRON_SECRET` is the
+  deliberate exception: it stays a per-request check so an unauthenticated
+  probe gets a 401 rather than a 500 confirming the deployment is broken.
+- **CORS is an allowlist, not a wildcard** (`_shared/http.ts`). Only the web
+  build needs CORS at all — native clients send no `Origin`. Add preview
+  origins via the `EXTRA_CORS_ORIGINS` secret (comma-separated) rather than
+  editing the file. Responses are built through `respond(req)` so there is no
+  longer a way to emit one that forgot its origin handling.
 
 Deploy with `npx supabase functions deploy coach reflect`; set the key with
 `npx supabase secrets set ANTHROPIC_API_KEY=...`. Both need a linked project.
@@ -197,6 +259,38 @@ The cron job lives in the database, not in a migration, because its command
 embeds `CRON_SECRET`. That puts it outside code review, which is how it sat
 failing every hour with nobody noticing — the on-demand fallback is good enough
 that a dead sweep is invisible from the app. Check both when it misbehaves:
+
+> **Pending, and the one item the audit could not fix from the repo:** that
+> command stores `CRON_SECRET` in cleartext in `cron.job.command`, where anyone
+> with SQL or dashboard read access can `select command from cron.job` and
+> recover the only gate in front of a `verify_jwt = false`, service-role
+> function. `cron` is not in `[api].schemas`, so PostgREST does not expose it —
+> this is privilege escalation from read access, not remote exploitation. Move
+> it into Vault and **rotate afterwards**, since the old value has been sitting
+> there readable:
+>
+> ```sql
+> select vault.create_secret('<new-secret>', 'cron_secret');
+>
+> select cron.alter_job(
+>   (select jobid from cron.job where jobname = 'coach-cadence'),
+>   command := $$
+>     select net.http_post(
+>       url     := 'https://<project-ref>.supabase.co/functions/v1/coach-cadence',
+>       headers := jsonb_build_object(
+>         'Content-Type',  'application/json',
+>         'Authorization', 'Bearer ' || (
+>           select decrypted_secret from vault.decrypted_secrets
+>           where name = 'cron_secret'
+>         )
+>       )
+>     );
+>   $$
+> );
+> ```
+>
+> Then `npx supabase secrets set CRON_SECRET=<new-secret>` so the function and
+> the job agree.
 
 - **`pg_net` must be installed** (`0006_pg_net.sql`). The job calls
   `net.http_post`; without the extension every run fails with `schema "net"

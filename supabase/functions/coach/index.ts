@@ -10,10 +10,12 @@
 
 import { RefusalError } from '../_shared/claude.ts';
 import { getOrGenerateCoachNote } from '../_shared/coach-generate.ts';
-import { clientForRequest, json, preflight, safeError } from '../_shared/http.ts';
+import { clientForRequest, respond } from '../_shared/http.ts';
 import { isPlausibleToday } from '../_shared/stats.ts';
 
 Deno.serve(async (req: Request) => {
+  const { json, preflight, error: fail } = respond(req);
+
   if (req.method === 'OPTIONS') return preflight();
   if (req.method !== 'POST') return json({ error: 'Use POST.' }, 405);
 
@@ -42,6 +44,6 @@ Deno.serve(async (req: Request) => {
     const { note, cached } = await getOrGenerateCoachNote(supabase, auth.user.id, today);
     return json({ note, cached });
   } catch (cause) {
-    return safeError(cause, cause instanceof RefusalError ? 422 : 502, 'coach');
+    return fail(cause, cause instanceof RefusalError ? 422 : 502, 'coach');
   }
 });

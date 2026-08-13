@@ -25,6 +25,31 @@ import { addDays, buildSnapshot, type CheckInRow, type DayKey, type HabitRow } f
 /** How far back to read check-ins. Long enough that a real streak is never clipped. */
 const HISTORY_DAYS = 400;
 
+/**
+ * Most habits a single note is built from.
+ *
+ * Every habit's name and emoji is copied verbatim into the snapshot the model
+ * reads, so an unbounded row count is an unbounded (and billed) input. The
+ * database caps active habits at 100 per account (`0007_bound_ai_spend.sql`);
+ * this is the second line, so a stale or dropped constraint can't turn one
+ * cache miss into a multi-megabyte call.
+ */
+const MAX_HABITS = 100;
+
+/**
+ * Distinct days with real activity before a note is worth generating.
+ *
+ * Two reasons, and the product one came first: a note written about an account
+ * with no history says nothing, because there is nothing to say. The security
+ * one is that the per-account throttle is keyed `(user_id, day)`, so a fresh
+ * account is a fresh quota — and before this, one habit row was the entire
+ * admission fee for five billed calls. Requiring history doesn't make scripted
+ * abuse impossible (check-in rows are as insertable as habit rows), it makes it
+ * cost more than a signup. Captcha on signup is the primary control; this is
+ * defence in depth behind it.
+ */
+const MIN_ACTIVE_DAYS = 3;
+
 const SYSTEM = `You write the short coaching note at the top of a habit tracker's Today screen. The person reads it in a couple of seconds, before logging their habits.
 
 You receive a JSON snapshot in which every statistic is already computed. Treat those numbers as the only facts available: do not recalculate them, estimate around them, or mention a figure that isn't there. \`asOf\` is today's date, and \`doneOnAsOf\` says whether each habit is already logged today.
@@ -104,6 +129,13 @@ export async function getOrGenerateCoachNote(
   supabase: SupabaseClient<any, any, any>,
   userId: string,
   today: DayKey,
+  /**
+   * True when `supabase` is a service-role client with no session behind it —
+   * i.e. the scheduled sweep. It selects the spend-claim function that accepts
+   * a user id; the signed-in path uses the one that derives identity from
+   * `auth.uid()` and cannot name another account. See `0007_bound_ai_spend.sql`.
+   */
+  { elevated = false }: { elevated?: boolean } = {},
 ): Promise<{ note: CoachNote | null; cached: boolean }> {
   const { data: cached } = await supabase
     .from('coach_messages')
@@ -121,7 +153,9 @@ export async function getOrGenerateCoachNote(
       .from('habits')
       .select('id, name, emoji, kind, target, created_at, reminder_time, deleted_at')
       .eq('user_id', userId)
-      .is('deleted_at', null),
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(MAX_HABITS),
     supabase
       .from('check_ins')
       .select('habit_id, day, count')
@@ -145,9 +179,28 @@ export async function getOrGenerateCoachNote(
   // Nothing to coach about yet — and no reason to spend a model call saying so.
   if (habits.length === 0) return { note: null, cached: false };
 
+  const checkIns = (checkInsRes.data ?? []) as CheckInRow[];
+
+  // A stored zero means "logged nothing that day" (it exists so an undo can
+  // propagate between devices), so it is not activity. See `buildLogs`.
+  const activeDays = new Set(checkIns.filter((row) => row.count > 0).map((row) => row.day));
+  if (activeDays.size < MIN_ACTIVE_DAYS) return { note: null, cached: false };
+
+  // Reserve the spend before making it. A call that fails or times out may
+  // still have been billed, so the claim has to happen ahead of the request
+  // rather than alongside the row that stores its result.
+  const { data: claimed, error: claimError } = elevated
+    ? await supabase.rpc('claim_ai_generation_for', { p_user_id: userId, p_kind: 'coach' })
+    : await supabase.rpc('claim_ai_generation', { p_kind: 'coach' });
+
+  if (claimError) throw new Error(claimError.message);
+  // Cap reached. Same degraded state as no network: no card, no error to
+  // dismiss, and the cached path keeps serving whatever already exists.
+  if (claimed !== true) return { note: null, cached: false };
+
   const snapshot = buildSnapshot(
     habits,
-    (checkInsRes.data ?? []) as CheckInRow[],
+    checkIns,
     challengeRes.data ?? null,
     today,
     HISTORY_DAYS,
