@@ -116,6 +116,18 @@ the core loop, and a spinner on a check-in destroys it.
   one `auth.uid() = user_id` policy. The anon key ships inside the bundle by
   design; it is the policies that keep one user out of another's rows. The
   service role key bypasses RLS entirely and must never appear under `src/`.
+- **On web the session lives in `localStorage`, and what makes that safe is
+  enforced by lint.** AsyncStorage's web build is `window.localStorage`, so the
+  refresh token is readable by any script on the origin; httpOnly cookies would
+  need `@supabase/ssr` and a server session route, and `web.output` is
+  `"static"`, so there is no server to host one (see the long note in
+  `supabase.ts`). The reason it's acceptable is that the XSS surface is empty by
+  construction — everything renders through `<ThemedText>` → RN `<Text>`, which
+  escapes. That is a property of the current code rather than of the storage
+  choice, so `eslint.config.js` fails the build on `dangerouslySetInnerHTML`,
+  `innerHTML`/`outerHTML`/`insertAdjacentHTML`, `eval`, and `new Function`
+  anywhere under `src/`. Don't disable those rules to ship a feature; the
+  refresh token is what's on the other side of them.
 - **Auth policy lives in the dashboard, and `config.toml` only mirrors it.**
   The committed values are 10-character passwords with
   `lower_upper_letters_digits`, email confirmations on, and a **600-second** OTP
@@ -337,6 +349,14 @@ that a dead sweep is invisible from the app. Check both when it misbehaves:
   the effect in `use-habits.tsx`) and pushed through the same settings sync
   path as `sound`/`haptics`. Nullable and additive — a user who hasn't synced
   it yet is simply skipped by the sweep, not blocked from anything.
+  **It is bounded by `0008_bound_timezone.sql`** (64 chars, IANA shape), for
+  the same reason 0007 bounds `habits.name`: it is user-writable straight
+  through PostgREST, and the sweep reads it across *every* account into one
+  function's memory. An unbounded column there is one user degrading the sweep
+  for all of them — invisibly, because the on-demand path covers for it.
+  `use-habits.tsx` mirrors the bound and skips a value that wouldn't pass, so a
+  rejected upsert can't leave a settings op pending forever; the two move
+  together. All 417 zones `Intl` knows fit, the longest being 30 characters.
 - **Push notifications were scoped out deliberately, not forgotten.** Real
   push needs a development build — Expo Go dropped support for remote push —
   so wiring push tokens and a send pipeline was deferred until that's worth

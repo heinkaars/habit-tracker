@@ -79,6 +79,20 @@ const DEFAULT_SETTINGS: Settings = {
   timezone: null,
 };
 
+/**
+ * Mirrors the `profiles_timezone_shape` constraint in
+ * `0008_bound_timezone.sql`, which bounds this column because the coach-cadence
+ * sweep reads it across every account at once.
+ *
+ * Same arrangement as `sign-in.tsx` restating `minimum_password_length`: the
+ * database is the control, this is what keeps a rejected value from becoming a
+ * settings op that stays pending and retries forever. The two have to move
+ * together — loosen one and the other silently starts failing.
+ */
+function isPlausibleTimezone(value: string): boolean {
+  return value.length <= 64 && /^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(value);
+}
+
 type State = {
   habits: Habit[];
   challenge: Challenge | null;
@@ -567,7 +581,11 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (loading) return;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (tz && tz !== stateRef.current.settings.timezone) {
+    // A runtime that returns something the database won't accept is skipped
+    // rather than stored: the sweep already treats a null timezone as "not
+    // synced yet" and simply passes over that profile, whereas a rejected
+    // upsert would leave the settings op pending and retrying indefinitely.
+    if (tz && isPlausibleTimezone(tz) && tz !== stateRef.current.settings.timezone) {
       updateSettings({ timezone: tz });
     }
   }, [loading, updateSettings]);
