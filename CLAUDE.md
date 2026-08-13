@@ -267,42 +267,60 @@ hasn't reached yet (new signup, no timezone synced) still gets a note the
 moment they open the app, exactly as before this existed.
 
 **The sweep has two dependencies outside this repo, and both were broken once.**
-The cron job lives in the database, not in a migration, because its command
-embeds `CRON_SECRET`. That puts it outside code review, which is how it sat
-failing every hour with nobody noticing — the on-demand fallback is good enough
-that a dead sweep is invisible from the app. Check both when it misbehaves:
+The cron job (named `coach-cadence-hourly`, jobid `1` at time of writing — not
+`coach-cadence`, which is the function it calls) lives in the database, not in
+a migration, because its command needs `CRON_SECRET`. That puts it outside code
+review, which is how it sat failing every hour with nobody noticing once, and
+how its secret sat exposed in cleartext another time — the on-demand fallback
+is good enough that both failures were invisible from the app. Check both
+tables when it misbehaves, and see the resolved finding below for how the
+secret is held today.
 
-> **Pending, and the one item the audit could not fix from the repo:** that
-> command stores `CRON_SECRET` in cleartext in `cron.job.command`, where anyone
-> with SQL or dashboard read access can `select command from cron.job` and
-> recover the only gate in front of a `verify_jwt = false`, service-role
-> function. `cron` is not in `[api].schemas`, so PostgREST does not expose it —
-> this is privilege escalation from read access, not remote exploitation. Move
-> it into Vault and **rotate afterwards**, since the old value has been sitting
-> there readable:
+> **Resolved 2026-08-13, previously the one item the audit couldn't fix from
+> the repo:** the job's command used to embed `CRON_SECRET` as a literal
+> string in `cron.job.command`, readable by anyone with SQL or dashboard read
+> access via `select command from cron.job` — recovering the only gate in
+> front of a `verify_jwt = false`, service-role function. (`cron` is not in
+> `[api].schemas`, so this was privilege escalation from read access, not
+> remote exploitation.) The command now reads the secret out of Vault instead:
 >
 > ```sql
-> select vault.create_secret('<new-secret>', 'cron_secret');
->
-> select cron.alter_job(
->   (select jobid from cron.job where jobname = 'coach-cadence'),
->   command := $$
->     select net.http_post(
->       url     := 'https://<project-ref>.supabase.co/functions/v1/coach-cadence',
->       headers := jsonb_build_object(
->         'Content-Type',  'application/json',
->         'Authorization', 'Bearer ' || (
->           select decrypted_secret from vault.decrypted_secrets
->           where name = 'cron_secret'
->         )
->       )
->     );
->   $$
+> select net.http_post(
+>   url     := 'https://<project-ref>.supabase.co/functions/v1/coach-cadence',
+>   headers := jsonb_build_object(
+>     'Content-Type',  'application/json',
+>     'Authorization', 'Bearer ' || (
+>       select decrypted_secret from vault.decrypted_secrets
+>       where name = 'cron_secret'
+>     )
+>   )
 > );
 > ```
 >
-> Then `npx supabase secrets set CRON_SECRET=<new-secret>` so the function and
-> the job agree.
+> To rotate it going forward — worth doing periodically, not just after a
+> known exposure — generate the replacement *inside* Postgres so the plaintext
+> never appears in typed SQL, a shell command, or a chat transcript:
+>
+> ```sql
+> select vault.update_secret(
+>   (select id from vault.secrets where name = 'cron_secret'),
+>   encode(gen_random_bytes(32), 'base64')
+> );
+>
+> select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret';
+> ```
+>
+> Copy that one value, then in the same terminal session:
+>
+> ```bash
+> read -rs CRON_NEW && npx supabase secrets set CRON_SECRET="$CRON_NEW" && unset CRON_NEW
+> ```
+>
+> `read -rs` keeps the value out of shell history; a literal on the command
+> line does not. Verify against `net._http_response`, not just
+> `cron.job_run_details` — the latter reports a job as "succeeded" even when
+> the HTTP call itself failed, which is exactly how the typo'd hostname below
+> went unnoticed for as long as it did.
 
 - **`pg_net` must be installed** (`0006_pg_net.sql`). The job calls
   `net.http_post`; without the extension every run fails with `schema "net"
