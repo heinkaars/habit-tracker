@@ -50,6 +50,41 @@ export function isDayKey(value: unknown): value is DayKey {
   return typeof value === 'string' && DAY_KEY.test(value);
 }
 
+/**
+ * How far a caller's `today` may sit from the server's UTC date.
+ *
+ * Real offsets span UTC-12 to UTC+14, so a caller's local date is at most one
+ * day either side of UTC's; two absorbs that plus a slow device clock.
+ */
+const MAX_SKEW_DAYS = 2;
+
+/**
+ * A `today` the caller could plausibly be living in.
+ *
+ * The client has to supply its own local day — these functions run in UTC and
+ * for anyone east of UTC in the evening the server's date is already tomorrow.
+ * But `isDayKey` only checks the *shape*, and both AI functions throttle model
+ * calls on a unique constraint keyed by that day: `(user_id, day)` for coach
+ * notes, `(user_id, period, period_start)` — derived from `today` — for
+ * reflections. An unbounded `today` therefore lets a caller pick a fresh cache
+ * key on every request and bill an unlimited number of generations. Bounding
+ * it collapses that key space from ~unbounded to five values per user per day,
+ * which is what makes the constraint an actual spend limit rather than a
+ * defence against double-taps.
+ *
+ * Not applied to `coach-cadence`, which derives its day from `localNow()`
+ * server-side and never reads one from a request.
+ */
+export function isPlausibleToday(value: unknown): value is DayKey {
+  if (!isDayKey(value)) return false;
+
+  const serverToday = new Date().toISOString().slice(0, 10) as DayKey;
+
+  return (
+    value >= addDays(serverToday, -MAX_SKEW_DAYS) && value <= addDays(serverToday, MAX_SKEW_DAYS)
+  );
+}
+
 function pad(value: number): string {
   return String(value).padStart(2, '0');
 }

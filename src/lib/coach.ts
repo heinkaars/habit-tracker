@@ -72,6 +72,10 @@ export async function fetchReflection(
  * Hides today's note. Written straight to the table rather than through a
  * function — there's no model call involved, and RLS already restricts the
  * update to the caller's own row.
+ *
+ * This is the *only* write the client makes to a cache table. Migration 0004
+ * revokes DELETE outright and narrows UPDATE to the `dismissed_at` column, so
+ * nothing else here could reach those tables even if it tried.
  */
 export async function dismissCoachNote(day: string): Promise<void> {
   if (!(await ready())) return;
@@ -82,26 +86,12 @@ export async function dismissCoachNote(day: string): Promise<void> {
     .eq('day', day);
 }
 
-/**
- * Dev-only: deletes today's cached note so the next `fetchCoachNote` triggers
- * a fresh model call instead of returning the one-per-day throttled row. RLS
- * scopes the delete to the caller, same as `dismissCoachNote` above.
- */
-export async function devClearCoachNote(day: string): Promise<void> {
-  if (!(await ready())) return;
-
-  await supabase!.from('coach_messages').delete().eq('day', day);
-}
-
-/**
- * Dev-only: deletes every cached reflection for a period so the next
- * `fetchReflection` regenerates instead of returning a throttled row. Clears
- * all period_starts rather than just the current one — `previousPeriod` is
- * computed server-side (`_shared/stats.ts`), and duplicating that math here
- * just to target one row isn't worth it for a dev button.
- */
-export async function devClearReflections(period: 'week' | 'month'): Promise<void> {
-  if (!(await ready())) return;
-
-  await supabase!.from('reflections').delete().eq('period', period);
-}
+// There used to be `devClearCoachNote` / `devClearReflections` here, which
+// deleted a cached row so the next fetch would regenerate. They were gated
+// behind `__DEV__` in the Settings UI, but the functions themselves shipped in
+// every bundle — and deleting a cache row is exactly how a user bypasses the
+// one-call-per-day throttle and bills unlimited generations. Migration 0004
+// revokes the DELETE privilege, which would make them fail silently anyway.
+//
+// To force a regeneration while developing, delete the row from the Supabase
+// dashboard, or use a service-role script. That privilege belongs off-device.

@@ -60,7 +60,7 @@ Expo Go connects over `exp://<mac-lan-ip>:8081`. The LAN IP changes on DHCP rene
 Data flows in one direction: pure logic → context → screens.
 
 - **`src/lib/`** — pure functions, no React and no storage. `habits.ts` (day keys, streaks, rates, seed), `challenges.ts` (fixed-length commitments). `feedback.ts` and `notifications.ts` are side-effecting but stateless. Change behavior here, not in screens.
-- **`src/hooks/use-habits.tsx`** — the only stateful layer. Holds `{ habits, challenge, settings }`, persists to AsyncStorage under `habit-tracker.state.v2`, and owns the migration from the v1 key. Its `loading` flag guards the first write so an empty state can't overwrite stored data before the read settles.
+- **`src/hooks/use-habits.tsx`** — the only stateful layer. Holds `{ habits, challenge, settings }`, persists to AsyncStorage under `habit-tracker.state.v3`, and owns the migration chain from v2 and v1 (see "Storage migrations" below). Its `loading` flag guards the first write so an empty state can't overwrite stored data before the read settles.
 - **`src/app/`** — expo-router. Root `_layout.tsx` is a Stack (tab group + onboarding + modal); `(tabs)/_layout.tsx` holds the tab bar and gates on onboarding.
 
 Screens are stateless with respect to habits — they read `useHabits()` and call lib helpers. Nothing computes streaks or dates inline.
@@ -145,13 +145,25 @@ already exist, because the budget is full.
   over identical randomised histories and fails if they disagree. Run it after
   touching either file — it is the only thing stopping the two from drifting.
   (`scripts/parity/` stubs `expo-crypto` so the app module imports under Node.)
-- **The client sends its own `today`.** Functions run in UTC, so they must never
-  decide what the user's local day is — for anyone east of UTC in the evening
-  the server's date is already tomorrow.
+- **The client sends its own `today` — but it is bounded, not just well-formed.**
+  Functions run in UTC, so they must never decide what the user's local day is;
+  for anyone east of UTC in the evening the server's date is already tomorrow.
+  They validate it with **`isPlausibleToday`**, not `isDayKey`: ±2 days from the
+  server's date, which covers UTC-12..UTC+14 plus a slow device clock. This is
+  load bearing, because the throttle below is keyed on that value — a shape-only
+  check makes the cache key caller-chosen and every request a fresh billed model
+  call. `scripts/parity/` guards the bound; don't loosen it back to `isDayKey`.
 - **Throttling is a unique constraint, not app code.** One coach note per
   `(user, day)`, one reflection per `(user, period, period_start)`. A double-tap
   or two devices racing therefore cannot produce two billed model calls; the
   loser re-reads the winner's row.
+- **The cache tables are read-mostly, and that is what makes the throttle a
+  spend limit.** `0004_lock_ai_cache.sql` revokes DELETE on `coach_messages` and
+  `reflections` from `authenticated`, and narrows UPDATE to a column-level grant
+  on `dismissed_at`. A user who can delete their own cached row can clear the
+  throttle and re-bill in a loop, which is why the client-side `devClear*`
+  helpers are gone — force a regeneration from the dashboard instead. INSERT
+  deliberately stays: `coach` and `reflect` write as the calling user.
 - **Cache before generate.** Both functions return the stored row on a hit and
   only call Claude on a miss, so reopening a screen costs an indexed SELECT.
 - **Reflections cover the last *completed* period**, not a trailing window — a
@@ -180,6 +192,22 @@ on-demand path uses. The on-demand path stays as a fallback — anyone the sweep
 hasn't reached yet (new signup, no timezone synced) still gets a note the
 moment they open the app, exactly as before this existed.
 
+**The sweep has two dependencies outside this repo, and both were broken once.**
+The cron job lives in the database, not in a migration, because its command
+embeds `CRON_SECRET`. That puts it outside code review, which is how it sat
+failing every hour with nobody noticing — the on-demand fallback is good enough
+that a dead sweep is invisible from the app. Check both when it misbehaves:
+
+- **`pg_net` must be installed** (`0006_pg_net.sql`). The job calls
+  `net.http_post`; without the extension every run fails with `schema "net"
+  does not exist`. `cron.job_run_details` is where that shows up, and it is the
+  only place it shows up.
+- **The URL must match the real project ref.** It was once a near-miss typo
+  that resolved to NXDOMAIN. `net.http_post` is *async*, so a bad host still
+  records the cron job as `succeeded` — the HTTP outcome lands in
+  `net._http_response`, not in `cron.job_run_details`. Check both tables, or a
+  DNS failure reads as a healthy job.
+
 - **This is the one function that runs as no one.** A cron tick isn't a
   signed-in user, so `coach-cadence` can't authenticate as a caller and ride
   RLS the way every other function does — it checks a dedicated `CRON_SECRET`
@@ -194,7 +222,11 @@ moment they open the app, exactly as before this existed.
   before a request reaches function code at all, by default — a cron job has
   neither, so the platform-level check has to be turned off here for the
   function's own `CRON_SECRET` check to ever run. Every other function keeps
-  the default on.
+  the default on. Because that header is the only gate in front of every user's
+  data, it is compared with `timingSafeEqual`, the function is **POST only**,
+  and it sends no CORS headers — a scheduler is not a browser. Point the
+  `cron.schedule` call at `net.http_post`, and keep `CRON_SECRET` at
+  `openssl rand -base64 32` strength.
 - **Client timezone lives on `profiles.timezone`**, captured once from
   `Intl.DateTimeFormat().resolvedOptions().timeZone` after storage loads (see
   the effect in `use-habits.tsx`) and pushed through the same settings sync
@@ -231,6 +263,12 @@ moment they open the app, exactly as before this existed.
 **All selection controls go through `<SelectChip>`.** Selected is a solid `accent` fill, not a tinted outline: the tinted version was nearly the same value as the dark card behind it. If you need a new selector, use this component rather than restyling a `Pressable`.
 
 **Don't scale a full-width element to animate it.** The check-in pop originally scaled the whole habit row, which pushed it past the screen edges and clipped its corners; it now scales only the badge. Transition animations must also skip the mount pass, or every already-complete habit animates on load.
+
+### Cross-platform gotchas already paid for
+
+**`Alert.alert` cannot render a three-button dialog on web.** React Native Web's implementation maps onto `window.confirm`, which only has OK/Cancel — a two-button case. `HabitMenu` (edit/delete on a habit row) hit this: the alert fired with no visible error, edit and delete simply had nothing to render into on web while working fine on device. Any menu with more than two choices needs a real component (`HabitMenu` uses RN's `Modal`), not `Alert.alert`.
+
+**Nested `Pressable`s don't isolate a tap on web** the way native's responder system does — a tap on an inner control bubbles to an outer one and can dismiss it out from under itself. `HabitMenu`'s card calls `e.stopPropagation()` on its own `Pressable` for exactly this reason. Skip `accessibilityRole="button"` on a tap-to-dismiss scrim, too — it renders a real `<button>` on web, and a `<button>` can't legally contain the buttons inside it.
 
 ## Conventions
 

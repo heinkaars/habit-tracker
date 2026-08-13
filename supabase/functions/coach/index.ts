@@ -10,8 +10,8 @@
 
 import { RefusalError } from '../_shared/claude.ts';
 import { getOrGenerateCoachNote } from '../_shared/coach-generate.ts';
-import { clientForRequest, json, preflight } from '../_shared/http.ts';
-import { isDayKey } from '../_shared/stats.ts';
+import { clientForRequest, json, preflight, safeError } from '../_shared/http.ts';
+import { isPlausibleToday } from '../_shared/stats.ts';
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return preflight();
@@ -25,18 +25,23 @@ Deno.serve(async (req: Request) => {
 
   // "Today" comes from the device. This function runs in UTC and must not
   // decide what the user's today is — for anyone east of UTC in the evening,
-  // the server's date is already tomorrow.
+  // the server's date is already tomorrow. It is bounded rather than merely
+  // well-formed because `coach_messages`' one-per-day constraint is keyed on
+  // it: an arbitrary day key is an arbitrary cache key, and every miss bills a
+  // model call. See `isPlausibleToday`.
   const body = await req.json().catch(() => ({}));
   const today = body?.today;
-  if (!isDayKey(today)) {
-    return json({ error: '`today` must be a YYYY-MM-DD local day key.' }, 400);
+  if (!isPlausibleToday(today)) {
+    return json(
+      { error: '`today` must be a YYYY-MM-DD local day key within two days of the current date.' },
+      400,
+    );
   }
 
   try {
     const { note, cached } = await getOrGenerateCoachNote(supabase, auth.user.id, today);
     return json({ note, cached });
   } catch (cause) {
-    const status = cause instanceof RefusalError ? 422 : 502;
-    return json({ error: cause instanceof Error ? cause.message : 'Generation failed.' }, status);
+    return safeError(cause, cause instanceof RefusalError ? 422 : 502, 'coach');
   }
 });

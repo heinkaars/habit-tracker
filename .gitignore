@@ -31,8 +31,11 @@ yarn-error.*
 *.pem
 
 # local env files
-.env
-.env*.local
+# Deny every .env variant and allow back only the committed template. The old
+# rules were `.env` + `.env*.local`, which left `.env.production` (and
+# `.env.staging`, `.env.development`) committable — one filename away from a
+# secret in git history, where deleting it doesn't help and only rotation does.
+.env*
 !.env.example
 
 # typescript

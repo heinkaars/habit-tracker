@@ -1,26 +1,30 @@
 import { createClient } from '@supabase/supabase-js';
-import * as fs from 'fs';
-import * as path from 'path';
 import { randomUUID } from 'crypto';
 
-// Load .env.local
-const envPath = path.join(process.cwd(), '.env.local');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  envContent.split('\n').forEach((line) => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
-}
-
+/**
+ * Seeds a real account with test history, using the service role key.
+ *
+ * That key bypasses every RLS policy in the project, so it is not read from a
+ * file here — not even a gitignored one. A key sitting in the Expo project root
+ * is one rename away from `EXPO_PUBLIC_`, which Metro inlines into every
+ * shipped bundle. Pass it for the single command that needs it and let it leave
+ * with the process. `--env-file` supplies the public URL from `.env.local`;
+ * nothing reads the key from disk:
+ *
+ *   SUPABASE_SERVICE_ROLE_KEY='...' \
+ *     npx tsx --env-file=.env.local scripts/seed-test-data.ts
+ */
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
   console.error(
-    'Missing EXPO_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local',
+    '\nMissing EXPO_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.\n\n' +
+      "  SUPABASE_SERVICE_ROLE_KEY='...' \\\n" +
+      '    npx tsx --env-file=.env.local scripts/seed-test-data.ts\n\n' +
+      'Do not put the service role key in .env.local or any other file in this\n' +
+      'repo — it sits next to the app bundle. Copy it from\n' +
+      'Dashboard -> Project Settings -> API Keys for the one command.\n',
   );
   process.exit(1);
 }

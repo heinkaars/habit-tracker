@@ -20,6 +20,33 @@ export function preflight(): Response {
 }
 
 /**
+ * Logs the real cause and returns a generic message to the caller.
+ *
+ * Postgres error text names constraints and columns, and the Anthropic SDK
+ * echoes upstream API detail — neither is something a caller needs, and both
+ * make probing these endpoints easier. The client discards the string anyway
+ * (`lib/coach.ts` turns every failure into `null`), so there is no UX cost to
+ * redacting it, and `console.error` keeps the detail in the function logs
+ * where debugging actually happens.
+ *
+ * 422 is the one status with a caller-actionable meaning — the model declined
+ * the data — so it gets its own wording rather than the generic fallback.
+ */
+export function safeError(cause: unknown, status: number, label: string): Response {
+  console.error(`[${label}]`, cause);
+
+  return json(
+    {
+      error:
+        status === 422
+          ? 'Could not generate a note for this data.'
+          : 'Something went wrong. Please try again.',
+    },
+    status,
+  );
+}
+
+/**
  * A Supabase client acting as the *calling user*, not as the service role.
  *
  * This is the security boundary. Forwarding the caller's JWT means every query

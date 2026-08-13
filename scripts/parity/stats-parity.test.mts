@@ -25,6 +25,7 @@ import {
   addDays as edgeAddDays,
   completionRate as edgeRate,
   isComplete as edgeIsComplete,
+  isPlausibleToday,
   longestStreak as edgeLongest,
   previousPeriod,
   streak as edgeStreak,
@@ -172,6 +173,34 @@ console.log('\nreflection period boundaries');
     start: '2025-12-01',
     end: '2025-12-31',
   });
+}
+
+console.log('\nthe `today` bound that keeps the model-call throttle a throttle');
+{
+  // `coach` and `reflect` throttle billed generations on a unique constraint
+  // keyed by the caller's `today`. Shape-only validation made that key
+  // caller-chosen, so every request could miss the cache and bill a new call.
+  // These cases are the difference between a spend limit and a cache.
+  const serverToday = new Date().toISOString().slice(0, 10);
+
+  check('accepts the server\'s own date', isPlausibleToday(serverToday), true);
+  // ±1 is a real timezone (UTC-12 .. UTC+14); ±2 absorbs a slow device clock.
+  check('accepts yesterday', isPlausibleToday(edgeAddDays(serverToday, -1)), true);
+  check('accepts tomorrow', isPlausibleToday(edgeAddDays(serverToday, 1)), true);
+  check('accepts the -2 edge', isPlausibleToday(edgeAddDays(serverToday, -2)), true);
+  check('accepts the +2 edge', isPlausibleToday(edgeAddDays(serverToday, 2)), true);
+
+  check('rejects 3 days back', isPlausibleToday(edgeAddDays(serverToday, -3)), false);
+  check('rejects 3 days forward', isPlausibleToday(edgeAddDays(serverToday, 3)), false);
+  check('rejects a year of back-dated keys', isPlausibleToday(edgeAddDays(serverToday, -365)), false);
+  check('rejects a far-future key', isPlausibleToday('2999-12-31'), false);
+  check('rejects an ancient key', isPlausibleToday('1900-01-01'), false);
+
+  // Still a day key first — the shape check has to survive the bound.
+  check('rejects a malformed key', isPlausibleToday('2026-8-1'), false);
+  check('rejects a non-string', isPlausibleToday(20260812), false);
+  check('rejects null', isPlausibleToday(null), false);
+  check('rejects undefined', isPlausibleToday(undefined), false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

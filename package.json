@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@supabase/supabase-js": "^2.112.2",
+    "@supabase/supabase-js": "^2.112.3",
     "expo": "~54.0.36",
     "expo-asset": "~12.0.13",
     "expo-audio": "~1.1.1",
@@ -12,19 +12,13 @@
     "expo-crypto": "~15.0.9",
     "expo-font": "~14.0.12",
     "expo-haptics": "~15.0.8",
-    "expo-image": "~3.0.11",
     "expo-linking": "~8.0.12",
     "expo-notifications": "~0.32.17",
     "expo-router": "~6.0.24",
     "expo-splash-screen": "~31.0.13",
-    "expo-status-bar": "~3.0.9",
-    "expo-symbols": "~1.0.8",
-    "expo-system-ui": "~6.0.9",
-    "expo-web-browser": "~15.0.11",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
@@ -40,7 +34,8 @@
     "typescript": "~5.9.2"
   },
   "comments": {
-    "overrides": "expo-audio's loose range on expo-asset lets npm resolve the SDK 57 build into this SDK 54 app, which expo-doctor flags as a duplicate native module. Pin both to their SDK 54 versions. Revisit if the SDK is ever bumped."
+    "overrides": "expo-audio's loose range on expo-asset lets npm resolve the SDK 57 build into this SDK 54 app, which expo-doctor flags as a duplicate native module. Pin both to their SDK 54 versions. Revisit if the SDK is ever bumped.",
+    "audit": "npm audit reports ~12 high / ~12 moderate, all inside the Metro and @expo/cli build toolchain (metro, metro-config, image-size, postcss, xcode, uuid). None of it ships in the app binary — the exposure is the dev server and `expo export`, i.e. someone feeding hostile input to the bundler. Every advertised fix resolves to SDK 57, which breaks Expo Go on the target device; see the SDK pin note in CLAUDE.md. Accepted deliberately: don't run the dev server against untrusted branches or third-party assets. Re-run `npm audit` when the SDK pin lifts and expect most of these to clear."
   },
   "overrides": {
     "expo-asset": "~12.0.13",

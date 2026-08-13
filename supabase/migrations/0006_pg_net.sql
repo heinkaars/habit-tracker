@@ -1,0 +1,41 @@
+-- pg_net, which the scheduled coach sweep needs and which was never installed.
+--
+-- The hourly `coach-cadence` sweep is driven by pg_cron calling
+-- `net.http_post`, but the extension providing that function did not exist —
+-- every run since the job was created failed with `schema "net" does not
+-- exist`, 0 successes. The job also pointed at a typo'd hostname (an extra
+-- character in the project ref) that resolved to NXDOMAIN; that is fixed on the
+-- job itself with `cron.alter_job`, not here, because the command embeds
+-- CRON_SECRET and does not belong in a migration.
+create extension if not exists pg_net;
+
+-- ---------------------------------------------------------------------------
+-- What this migration deliberately does NOT do, and why.
+--
+-- pg_net grants EXECUTE on its functions to `PUBLIC`, so `anon` and
+-- `authenticated` inherit a server-side HTTP client. The obvious hardening is:
+--
+--   revoke all on all functions in schema net from public;
+--   revoke usage on schema net from public, anon, authenticated;
+--
+-- Those statements were in this file and were **silently no-ops**. The `net`
+-- schema and every function in it are owned by `supabase_admin`; migrations run
+-- as `postgres`, which is not a superuser here and is not a member of that role
+-- (verified: `pg_has_role('postgres','supabase_admin','MEMBER')` = false). A
+-- REVOKE by a non-owner raises a WARNING, not an ERROR, so `db push` reports
+-- success and the privileges are untouched. A migration that appears to lock
+-- something down but doesn't is worse than one that admits it can't — it is the
+-- same failure mode as an RLS-enabled table with no policies.
+--
+-- So the boundary is not a grant. It is that PostgREST exposes only the schemas
+-- in `[api].schemas` (`public`, `graphql_public`) — `net` is not among them, so
+-- there is no `/rpc/http_post` for any role to call. That holds as long as:
+--
+--   1. `net` is never added to `[api].schemas` in config.toml, and
+--   2. nothing in `public` is a SECURITY INVOKER wrapper around `net.*`.
+--
+-- Both are worth checking in review; neither is enforced by the database. If
+-- Supabase ever grants `postgres` membership of `supabase_admin`, restore the
+-- two revokes above and re-grant usage/execute to `postgres`, which the cron
+-- job runs as.
+-- ---------------------------------------------------------------------------

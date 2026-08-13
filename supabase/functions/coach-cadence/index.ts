@@ -15,24 +15,61 @@
  * this function makes is still scoped to one `user_id` at a time (see
  * `getOrGenerateCoachNote`) — the elevated client widens *reach* across
  * accounts, not the shape of what any single call touches.
+ *
+ * POST only, and the secret is compared in constant time. If the scheduler was
+ * set up with a GET, it will start returning 405 — update the `cron.schedule`
+ * call to `net.http_post`.
  */
 
+import { timingSafeEqual } from 'jsr:@std/crypto@1/timing-safe-equal';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 import { RefusalError } from '../_shared/claude.ts';
 import { getOrGenerateCoachNote } from '../_shared/coach-generate.ts';
-import { json, preflight } from '../_shared/http.ts';
 import { localNow, type DayKey } from '../_shared/stats.ts';
 
 /** Local hour each user's note is generated for. */
 const TARGET_HOUR = 7;
 
+/**
+ * No CORS and no preflight, unlike `coach` and `reflect`.
+ *
+ * Those two are called by the app from a browser on web, so they have to
+ * answer an OPTIONS probe. A scheduler is not a browser and never sends one —
+ * advertising this endpoint to page scripts would be surface with no caller.
+ */
+function reply(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/**
+ * Constant-time check of the shared secret.
+ *
+ * This function runs as the service role with `verify_jwt = false`, so this
+ * header is the only thing standing in front of every user's data — the one
+ * place in the project where a `!==` short-circuiting on the first wrong byte
+ * is worth replacing on principle, even though remote timing attacks across
+ * the platform's network jitter aren't practical. Lengths are compared first
+ * because `timingSafeEqual` requires equal-sized inputs.
+ */
+function authorized(req: Request, secret: string): boolean {
+  const encoder = new TextEncoder();
+  const presented = encoder.encode(req.headers.get('Authorization') ?? '');
+  const expected = encoder.encode(`Bearer ${secret}`);
+
+  return presented.byteLength === expected.byteLength && timingSafeEqual(presented, expected);
+}
+
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return preflight();
+  // A sweep mutates state and bills model calls; it is not a GET.
+  if (req.method !== 'POST') return reply({ error: 'Use POST.' }, 405);
 
   const secret = Deno.env.get('CRON_SECRET');
-  if (!secret || req.headers.get('Authorization') !== `Bearer ${secret}`) {
-    return json({ error: 'Unauthorized.' }, 401);
+  if (!secret || !authorized(req, secret)) {
+    return reply({ error: 'Unauthorized.' }, 401);
   }
 
   const supabase = createClient(
@@ -45,7 +82,12 @@ Deno.serve(async (req: Request) => {
     .select('id, timezone')
     .not('timezone', 'is', null);
 
-  if (error) return json({ error: error.message }, 500);
+  // Only the secret holder ever sees this body, so the detail is safe here and
+  // is what makes a failed sweep diagnosable from the scheduler's run log.
+  if (error) {
+    console.error('[coach-cadence]', error);
+    return reply({ error: error.message }, 500);
+  }
 
   let generated = 0;
   let skipped = 0;
@@ -81,5 +123,5 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  return json({ total: profiles?.length ?? 0, generated, skipped, failed });
+  return reply({ total: profiles?.length ?? 0, generated, skipped, failed }, 200);
 });

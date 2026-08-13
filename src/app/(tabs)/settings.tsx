@@ -11,14 +11,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useHabits, type SyncStatus } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
 import { challengeTitle } from '@/lib/challenges';
-import {
-  devClearCoachNote,
-  devClearReflections,
-  fetchCoachNote,
-  fetchReflection,
-  type CoachNote,
-  type Reflection,
-} from '@/lib/coach';
+import { fetchCoachNote, fetchReflection, type CoachNote, type Reflection } from '@/lib/coach';
 import { feedbackChallenge, feedbackComplete } from '@/lib/feedback';
 import { dayKey, formatTime } from '@/lib/habits';
 import { notificationsSupported, previewNotification, scheduledCount } from '@/lib/notifications';
@@ -94,14 +87,20 @@ export default function SettingsScreen() {
     setAiTesting(null);
   }
 
+  /**
+   * Shows the note for today: generated on a first call, the stored row on
+   * every one after.
+   *
+   * This used to delete the cached row first so each tap forced a fresh model
+   * call. That delete is gone — the privilege behind it (see migration 0004)
+   * was also how a user could bypass the one-call-per-day throttle and bill
+   * unlimited generations. Forcing a regeneration is now a dashboard action,
+   * which is the right home for something that spends money.
+   */
   async function runCoachTest() {
     setAiTesting('coach');
     setAiResult(null);
-    const today = dayKey();
-    // Clear the cached row first — otherwise a second tap the same day just
-    // returns what the first tap already generated.
-    await devClearCoachNote(today);
-    const note = await fetchCoachNote(today);
+    const note = await fetchCoachNote(dayKey());
     setAiResult({ kind: 'note', note });
     setAiTesting(null);
   }
@@ -109,7 +108,6 @@ export default function SettingsScreen() {
   async function runReflectionTest(period: 'week' | 'month') {
     setAiTesting(period);
     setAiResult(null);
-    await devClearReflections(period);
     const reflection = await fetchReflection(period, dayKey());
     setAiResult({ kind: 'reflection', period, reflection });
     setAiTesting(null);
@@ -325,17 +323,17 @@ export default function SettingsScreen() {
               onPress={runPushTest}
             />
             <DevButton
-              label={aiTesting === 'coach' ? 'Generating…' : 'Generate coaching nudge'}
-              hint="Clears today's cached note, then calls the coach function fresh"
+              label={aiTesting === 'coach' ? 'Loading…' : "Show today's coaching nudge"}
+              hint="Generates on the first call today, then returns the stored note"
               onPress={runCoachTest}
             />
             <DevButton
-              label={aiTesting === 'week' ? 'Generating…' : 'Generate weekly reflection'}
+              label={aiTesting === 'week' ? 'Loading…' : 'Show weekly reflection'}
               hint="Covers the last completed week, from the simulated history above"
               onPress={() => runReflectionTest('week')}
             />
             <DevButton
-              label={aiTesting === 'month' ? 'Generating…' : 'Generate monthly reflection'}
+              label={aiTesting === 'month' ? 'Loading…' : 'Show monthly reflection'}
               hint="Covers the last completed month"
               onPress={() => runReflectionTest('month')}
             />

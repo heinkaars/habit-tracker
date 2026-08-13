@@ -7,11 +7,11 @@
  */
 
 import { generateJson, RefusalError } from '../_shared/claude.ts';
-import { clientForRequest, json, preflight } from '../_shared/http.ts';
+import { clientForRequest, json, preflight, safeError } from '../_shared/http.ts';
 import {
   addDays,
   buildSnapshot,
-  isDayKey,
+  isPlausibleToday,
   previousPeriod,
   type CheckInRow,
   type HabitRow,
@@ -101,8 +101,15 @@ Deno.serve(async (req: Request) => {
   const today = body?.today;
   const period: Period = body?.period === 'month' ? 'month' : 'week';
 
-  if (!isDayKey(today)) {
-    return json({ error: '`today` must be a YYYY-MM-DD local day key.' }, 400);
+  // Bounded, not just well-formed: `previousPeriod` derives `period_start`
+  // from this, and that is the throttle key for `reflections`. An arbitrary
+  // `today` names an arbitrary past week, and each one is a fresh cache miss
+  // that bills a model call. See `isPlausibleToday`.
+  if (!isPlausibleToday(today)) {
+    return json(
+      { error: '`today` must be a YYYY-MM-DD local day key within two days of the current date.' },
+      400,
+    );
   }
 
   const { start, end } = previousPeriod(today, period);
@@ -140,7 +147,7 @@ Deno.serve(async (req: Request) => {
   ]);
 
   const error = habitsRes.error ?? checkInsRes.error;
-  if (error) return json({ error: error.message }, 500);
+  if (error) return safeError(error, 500, 'reflect');
 
   const habits = (habitsRes.data ?? []) as HabitRow[];
   if (habits.length === 0) return json({ reflection: null });
@@ -167,8 +174,7 @@ Deno.serve(async (req: Request) => {
       maxTokens: 3000,
     });
   } catch (cause) {
-    const status = cause instanceof RefusalError ? 422 : 502;
-    return json({ error: cause instanceof Error ? cause.message : 'Generation failed.' }, status);
+    return safeError(cause, cause instanceof RefusalError ? 422 : 502, 'reflect');
   }
 
   const row = {
@@ -195,7 +201,7 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (winner) return json({ reflection: toReflection(winner as ReflectionRow), cached: true });
-    return json({ error: insertError.message }, 500);
+    return safeError(insertError, 500, 'reflect');
   }
 
   return json({
