@@ -1,56 +1,56 @@
-# Welcome to your Expo app 👋
+# Habit Tracker
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A habit tracker built on Expo + React Native, running on iOS, Android, and web
+from one codebase.
+
+Habits, a fixed-length challenge, and daily reminders — kept local-first, with
+optional Supabase sync and Claude-powered coaching notes when it's configured.
 
 ## Get started
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
 ```bash
-npm run reset-project
+npm install
+npm run web        # dev server + web preview
+npm run ios        # dev server, opens iOS target
+npm run android    # dev server, opens Android target
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+This project is pinned to **Expo SDK 54** deliberately — see [CLAUDE.md](./CLAUDE.md)
+before upgrading anything Expo-related.
 
-### Other setup steps
+### Optional: Supabase sync and AI coaching
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+The app works fully offline with no configuration. To enable account sync and
+the AI coaching/reflection features, copy `.env.example` to `.env` and fill in
+your Supabase project details. See `supabase/migrations/0001_init.sql` for the
+schema and `supabase/functions/` for the Edge Functions.
 
-## Learn more
+## Commands
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run lint         # eslint via expo lint
+npm run test:parity  # cross-checks src/lib/habits.ts against the Edge Function copy
+npx tsc --noEmit      # typecheck (not part of lint, run separately)
+npx expo-doctor       # dependency/config health check
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+There is no test framework configured — verification is typecheck + lint +
+running the app.
 
-## Join the community
+## Architecture
 
-Join our community of developers creating universal apps.
+Data flows in one direction: pure logic → context → screens.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- **`src/lib/`** — pure functions, no React and no storage (`habits.ts`,
+  `challenges.ts`, `feedback.ts`, `notifications.ts`).
+- **`src/hooks/use-habits.tsx`** — the only stateful layer; persists to
+  AsyncStorage and owns the migration chain between storage versions.
+- **`src/app/`** — expo-router screens, kept stateless with respect to habits.
+
+See [CLAUDE.md](./CLAUDE.md) for the full architecture notes, domain rules,
+and the product framework (core loop, challenge, retention) this app is
+structured around.
+
+## License
+
+Private project, not currently licensed for reuse.
