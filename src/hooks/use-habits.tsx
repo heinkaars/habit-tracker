@@ -32,6 +32,7 @@ import {
   isComplete,
   logStep,
   migrateV1,
+  recentDays,
   seedHabits,
   type Habit,
   type HabitKind,
@@ -62,6 +63,12 @@ export type Settings = {
   sound: boolean;
   haptics: boolean;
   remindersEnabled: boolean;
+  /**
+   * IANA name, e.g. "America/New_York" — captured from the device, not user-
+   * facing. Lets the scheduled coach-note sweep know what "morning" means for
+   * this account without needing them to have opened the app that day.
+   */
+  timezone: string | null;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -69,6 +76,7 @@ const DEFAULT_SETTINGS: Settings = {
   sound: true,
   haptics: true,
   remindersEnabled: false,
+  timezone: null,
 };
 
 type State = {
@@ -114,6 +122,8 @@ type HabitsContextValue = {
   /** Dev-only helpers, surfaced in Settings behind __DEV__. */
   devShiftChallenge: (deltaDays: number) => void;
   devFillChallenge: (leaveLastDayOpen: boolean) => void;
+  devSimulateHistory: (days: number, mode: 'full' | 'mixed') => void;
+  devSimulateFullChallenge: () => void;
 };
 
 const HabitsContext = createContext<HabitsContextValue | null>(null);
@@ -546,6 +556,22 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  // Keeps the stored timezone matched to the device's, so the scheduled
+  // coach-note sweep can compute the right local day for this account. Gated
+  // on `loading`: calling this before storage has finished loading would
+  // apply the update to the still-default state, which the load() effect then
+  // overwrites a moment later. Not re-checked on every foreground — a
+  // reinstall or app restart after changing timezone (e.g. travel) re-runs
+  // it; a still-running app doesn't notice mid-session, which is an accepted
+  // gap for a habit tracker rather than something worth polling for.
+  useEffect(() => {
+    if (loading) return;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && tz !== stateRef.current.settings.timezone) {
+      updateSettings({ timezone: tz });
+    }
+  }, [loading, updateSettings]);
+
   const resetToDemo = useCallback(() => {
     setState((current) => {
       const at = now();
@@ -618,6 +644,81 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  /**
+   * Backfills the last `days` days across every live habit, so streaks,
+   * rates, and the AI features can be tested against something that looks
+   * like real usage instead of a fresh install. 'full' completes every day;
+   * 'mixed' hits target on roughly half the days and leaves the rest partial
+   * or empty, the way a real account looks after a few imperfect weeks.
+   */
+  const devSimulateHistory = useCallback((days: number, mode: 'full' | 'mixed') => {
+    setState((current) => {
+      const at = now();
+      const keys = recentDays(days);
+      const ops: PendingOp[] = [];
+
+      const nextHabits = current.habits.map((habit) => {
+        if (habit.deletedAt) return habit;
+
+        const log = { ...habit.log };
+        for (const key of keys) {
+          const hit = mode === 'full' || Math.random() < 0.5;
+          const value = hit ? habit.target : Math.floor(Math.random() * habit.target);
+
+          if (value > 0) {
+            log[key] = value;
+          } else {
+            delete log[key];
+          }
+          ops.push({ kind: 'checkin', habitId: habit.id, day: key, at });
+        }
+
+        return { ...habit, log };
+      });
+
+      return { ...current, habits: nextHabits, pending: queue(current, ops) };
+    });
+  }, []);
+
+  /**
+   * Completes a challenge end to end: starts one on the first live habit if
+   * none is active, then fills every day and stamps `completedAt`. Unlike
+   * `devFillChallenge(false)`, which only fills the log, this leaves the
+   * challenge in the same state a real final tap would — so the Today banner
+   * and Challenge screen read as genuinely finished, not just fully logged.
+   */
+  const devSimulateFullChallenge = useCallback(() => {
+    setState((current) => {
+      const liveHabits = current.habits.filter((habit) => !habit.deletedAt);
+      if (liveHabits.length === 0) return current;
+
+      const active = current.challenge && !current.challenge.deletedAt ? current.challenge : null;
+      const target = active ?? createChallenge(liveHabits[0].id, 7, 'Simulated challenge');
+      const days = challengeDays(target);
+      const completed: Challenge = { ...target, completedAt: days[days.length - 1] };
+
+      const at = now();
+      const ops: PendingOp[] = [
+        { kind: 'challenge', id: completed.id, at },
+        ...days.map((day) => ({ kind: 'checkin' as const, habitId: completed.habitId, day, at })),
+      ];
+
+      return {
+        ...current,
+        challenge: completed,
+        habits: current.habits.map((habit) =>
+          habit.id === completed.habitId
+            ? {
+                ...habit,
+                log: { ...habit.log, ...Object.fromEntries(days.map((key) => [key, habit.target])) },
+              }
+            : habit,
+        ),
+        pending: queue(current, ops),
+      };
+    });
+  }, []);
+
   const value = useMemo(
     () => ({
       habits,
@@ -635,6 +736,8 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
       resetToDemo,
       devShiftChallenge,
       devFillChallenge,
+      devSimulateHistory,
+      devSimulateFullChallenge,
     }),
     [
       habits,
@@ -652,6 +755,8 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
       resetToDemo,
       devShiftChallenge,
       devFillChallenge,
+      devSimulateHistory,
+      devSimulateFullChallenge,
     ],
   );
 

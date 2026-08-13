@@ -75,6 +75,36 @@ export function recentDays(count: number, today: DayKey): DayKey[] {
   return Array.from({ length: count }, (_, i) => addDays(today, i - count + 1));
 }
 
+/**
+ * The current local hour and day key in an IANA timezone (e.g.
+ * `"America/New_York"`), via the runtime's own tz database. This is what lets
+ * a scheduled sweep — which otherwise only knows UTC — ask "is it currently
+ * this user's morning?" without a hand-maintained offset table that would
+ * need updating every time a region's DST rules change.
+ *
+ * Throws if `timeZone` isn't a name `Intl` recognizes — callers with
+ * user-supplied values should catch that rather than let one bad row abort
+ * the whole run.
+ */
+export function localNow(timeZone: string): { hour: number; day: DayKey } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  const day = `${get('year')}-${get('month')}-${get('day')}` as DayKey;
+  // hour12:false can format midnight as "24" in some runtimes; normalize so a
+  // plain `=== targetHour` comparison is reliable at every hour of the day.
+  const hour = Number(get('hour')) % 24;
+
+  return { day, hour };
+}
+
 export type Period = 'week' | 'month';
 
 /**

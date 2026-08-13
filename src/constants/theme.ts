@@ -20,6 +20,7 @@ export const Colors = {
      *  dark mode's accent is a light blue, where white measures 2.69:1. */
     onAccent: '#ffffff',
     disabledSurface: '#E0E1E6',
+    danger: '#D92D20',
   },
   dark: {
     text: '#ffffff',
@@ -31,6 +32,9 @@ export const Colors = {
     accentSoft: '#16213D',
     onAccent: '#0B1220',
     disabledSurface: '#2E3135',
+    /** Lighter than light mode's, same reason `accent` is lighter in dark —
+     *  a dark red on a near-black card reads as illegible instead of urgent. */
+    danger: '#FF6B6B',
   },
 } as const;
 

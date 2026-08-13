@@ -20,10 +20,10 @@ const MAX_PIPS = 5;
 type HabitRowProps = {
   habit: Habit;
   onPress: () => void;
-  onLongPress: () => void;
+  onMenu: () => void;
 };
 
-export function HabitRow({ habit, onPress, onLongPress }: HabitRowProps) {
+export function HabitRow({ habit, onPress, onMenu }: HabitRowProps) {
   const theme = useTheme();
   const today = dayKey();
   const done = isComplete(habit, today);
@@ -49,21 +49,31 @@ export function HabitRow({ habit, onPress, onLongPress }: HabitRowProps) {
   const popStyle = useAnimatedStyle(() => ({ transform: [{ scale: pop.value }] }));
 
   return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
-      accessibilityRole="button"
-      accessibilityState={{ checked: done }}
-      accessibilityLabel={habit.name}
-      accessibilityHint={
-        habit.kind === 'count'
-          ? `Logged ${progress} of ${habit.target} today. Tap to add one, long press to edit or delete`
-          : 'Tap to toggle for today, long press to edit or delete'
-      }
-      style={({ pressed }) => [styles.pressable, pressed && styles.pressed]}>
-      <ThemedView
-        type={done ? 'accentSoft' : 'backgroundElement'}
-        style={[styles.row, done && { borderColor: theme.accent }]}>
+    // Plain View, not a Pressable: on web, accessibilityRole="button" renders
+    // an actual <button>, and a <button> can't legally contain another
+    // <button> — nesting one caused a hydration warning and put the two taps
+    // in the same DOM subtree, which is what made the menu button's tap leak
+    // through to this row's onPress in the first place. The main area and the
+    // menu button are now independent, sibling buttons instead.
+    <ThemedView
+      type={done ? 'accentSoft' : 'backgroundElement'}
+      style={[styles.row, done && { borderColor: theme.accent }]}>
+      <Pressable
+        onPress={onPress}
+        // Long press still works as a shortcut on native, but it's no longer
+        // the only way in — the "⋯" button is what actually works on web (a
+        // mouse has no long-press) and doesn't require discovering a hidden
+        // gesture on any platform.
+        onLongPress={onMenu}
+        accessibilityRole="button"
+        accessibilityState={{ checked: done }}
+        accessibilityLabel={habit.name}
+        accessibilityHint={
+          habit.kind === 'count'
+            ? `Logged ${progress} of ${habit.target} today. Tap to add one.`
+            : 'Tap to toggle for today.'
+        }
+        style={({ pressed }) => [styles.mainArea, pressed && styles.pressed]}>
         <Animated.View
           style={[
             styles.badge,
@@ -116,26 +126,41 @@ export function HabitRow({ habit, onPress, onLongPress }: HabitRowProps) {
             {streakCount > 0 ? `🔥 ${streakCount} day streak` : 'No streak yet'}
           </ThemedText>
         </View>
-      </ThemedView>
-    </Pressable>
+      </Pressable>
+
+      <Pressable
+        onPress={onMenu}
+        accessibilityRole="button"
+        accessibilityLabel={`More options for ${habit.name}`}
+        hitSlop={10}
+        style={({ pressed }) => [styles.menuButton, pressed && styles.pressed]}>
+        <ThemedText themeColor="textSecondary" style={styles.menuDots}>
+          ⋯
+        </ThemedText>
+      </Pressable>
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  pressable: {
-    alignSelf: 'stretch',
-  },
   pressed: {
     opacity: 0.7,
   },
   row: {
+    alignSelf: 'stretch',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.three,
+    gap: Spacing.two,
     padding: Spacing.three,
     borderRadius: Spacing.three,
     borderWidth: 1,
     borderColor: 'transparent',
+  },
+  mainArea: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
   },
   badge: {
     width: 32,
@@ -170,5 +195,13 @@ const styles = StyleSheet.create({
     width: 14,
     height: 6,
     borderRadius: 3,
+  },
+  menuButton: {
+    padding: Spacing.two,
+  },
+  menuDots: {
+    fontSize: 20,
+    lineHeight: 20,
+    fontWeight: '700',
   },
 });

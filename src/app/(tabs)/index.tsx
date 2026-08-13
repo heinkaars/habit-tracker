@@ -1,10 +1,11 @@
 import { Link, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Celebration, type CelebrationVariant } from '@/components/celebration';
 import { CoachCard } from '@/components/coach-card';
+import { HabitMenu } from '@/components/habit-menu';
 import { HabitRow } from '@/components/habit-row';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -12,7 +13,7 @@ import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useHabits } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
 import { challengeTitle, daysRemaining } from '@/lib/challenges';
-import { dayKey, isComplete } from '@/lib/habits';
+import { dayKey, isComplete, type Habit } from '@/lib/habits';
 
 const CHEERS = ['Nice.', 'Logged.', 'Kept it going.', 'That’s the one.'];
 
@@ -24,6 +25,7 @@ export default function TodayScreen() {
 
   const [celebration, setCelebration] = useState<CelebrationVariant | null>(null);
   const [message, setMessage] = useState('');
+  const [menuHabit, setMenuHabit] = useState<Habit | null>(null);
 
   // Recomputed per render so the screen follows midnight rollovers.
   const today = dayKey();
@@ -53,22 +55,6 @@ export default function TodayScreen() {
   }
 
   const clearCelebration = useCallback(() => setCelebration(null), []);
-
-  function openHabitMenu(id: string, name: string) {
-    Alert.alert(name, undefined, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Edit', onPress: () => router.push(`/new-habit?id=${id}`) },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () =>
-          Alert.alert('Delete habit', `Remove "${name}" and its history?`, [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Delete', style: 'destructive', onPress: () => remove(id) },
-          ]),
-      },
-    ]);
-  }
 
   return (
     <ThemedView style={styles.container}>
@@ -138,7 +124,7 @@ export default function TodayScreen() {
               key={habit.id}
               habit={habit}
               onPress={() => onStep(habit.id)}
-              onLongPress={() => openHabitMenu(habit.id, habit.name)}
+              onMenu={() => setMenuHabit(habit)}
             />
           ))
         )}
@@ -164,11 +150,18 @@ export default function TodayScreen() {
         </Link>
 
         <ThemedText type="small" themeColor="textSecondary">
-          Tap a habit to log it. Long press to edit or delete.
+          Tap a habit to log it. Tap ⋯ to edit or delete.
         </ThemedText>
       </ScrollView>
 
       <Celebration variant={celebration} message={message} onDone={clearCelebration} />
+
+      <HabitMenu
+        habit={menuHabit}
+        onClose={() => setMenuHabit(null)}
+        onEdit={(id) => router.push(`/new-habit?id=${id}`)}
+        onDelete={(id) => remove(id)}
+      />
     </ThemedView>
   );
 }

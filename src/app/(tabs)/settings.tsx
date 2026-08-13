@@ -11,9 +11,17 @@ import { useAuth } from '@/hooks/use-auth';
 import { useHabits, type SyncStatus } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
 import { challengeTitle } from '@/lib/challenges';
+import {
+  devClearCoachNote,
+  devClearReflections,
+  fetchCoachNote,
+  fetchReflection,
+  type CoachNote,
+  type Reflection,
+} from '@/lib/coach';
 import { feedbackChallenge, feedbackComplete } from '@/lib/feedback';
-import { formatTime } from '@/lib/habits';
-import { notificationsSupported, scheduledCount } from '@/lib/notifications';
+import { dayKey, formatTime } from '@/lib/habits';
+import { notificationsSupported, previewNotification, scheduledCount } from '@/lib/notifications';
 
 const SYNC_LABEL: Record<SyncStatus, string> = {
   off: 'Saved on this device only.',
@@ -36,10 +44,19 @@ export default function SettingsScreen() {
     resetToDemo,
     devShiftChallenge,
     devFillChallenge,
+    devSimulateHistory,
+    devSimulateFullChallenge,
   } = useHabits();
 
   const [scheduled, setScheduled] = useState(0);
   const [celebration, setCelebration] = useState<CelebrationVariant | null>(null);
+  const [aiTesting, setAiTesting] = useState<'push' | 'coach' | 'week' | 'month' | null>(null);
+  const [aiResult, setAiResult] = useState<
+    | { kind: 'push'; ok: boolean }
+    | { kind: 'note'; note: CoachNote | null }
+    | { kind: 'reflection'; period: 'week' | 'month'; reflection: Reflection | null }
+    | null
+  >(null);
 
   const withReminders = habits.filter((habit) => habit.reminderTime);
 
@@ -62,6 +79,40 @@ export default function SettingsScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reset', style: 'destructive', onPress: resetToDemo },
     ]);
+  }
+
+  async function runPushTest() {
+    if (habits.length === 0) return;
+
+    setAiTesting('push');
+    setAiResult(null);
+    // Prefer the challenge's habit when one's active — that's the reminder a
+    // real user is most likely to see mid-challenge.
+    const target = habits.find((habit) => habit.id === challenge?.habitId) ?? habits[0];
+    const ok = await previewNotification(target);
+    setAiResult({ kind: 'push', ok });
+    setAiTesting(null);
+  }
+
+  async function runCoachTest() {
+    setAiTesting('coach');
+    setAiResult(null);
+    const today = dayKey();
+    // Clear the cached row first — otherwise a second tap the same day just
+    // returns what the first tap already generated.
+    await devClearCoachNote(today);
+    const note = await fetchCoachNote(today);
+    setAiResult({ kind: 'note', note });
+    setAiTesting(null);
+  }
+
+  async function runReflectionTest(period: 'week' | 'month') {
+    setAiTesting(period);
+    setAiResult(null);
+    await devClearReflections(period);
+    const reflection = await fetchReflection(period, dayKey());
+    setAiResult({ kind: 'reflection', period, reflection });
+    setAiTesting(null);
   }
 
   return (
@@ -237,6 +288,117 @@ export default function SettingsScreen() {
                 setCelebration('challenge');
               }}
             />
+
+            <ThemedText type="smallBold" style={styles.devSectionLabel}>
+              Data simulation
+            </ThemedText>
+            <DevButton
+              label="Simulate 30 days (all habits, 100%)"
+              hint="Backfills every habit with no misses"
+              onPress={() => devSimulateHistory(30, 'full')}
+            />
+            <DevButton
+              label="Simulate 30 days (mixed, ±50%)"
+              hint="Backfills every habit with a realistic, uneven hit rate"
+              onPress={() => devSimulateHistory(30, 'mixed')}
+            />
+            <DevButton
+              label="Simulate full challenge completion"
+              hint={
+                challenge
+                  ? 'Fills and completes the active challenge'
+                  : 'Starts a 7-day challenge and completes it'
+              }
+              onPress={devSimulateFullChallenge}
+            />
+
+            <ThemedText type="smallBold" style={styles.devSectionLabel}>
+              AI testing
+            </ThemedText>
+            <DevButton
+              label={aiTesting === 'push' ? 'Sending…' : 'Simulate push notification'}
+              hint={
+                habits.length === 0
+                  ? 'Add a habit first'
+                  : 'Fires a reminder immediately, using its usual copy'
+              }
+              onPress={runPushTest}
+            />
+            <DevButton
+              label={aiTesting === 'coach' ? 'Generating…' : 'Generate coaching nudge'}
+              hint="Clears today's cached note, then calls the coach function fresh"
+              onPress={runCoachTest}
+            />
+            <DevButton
+              label={aiTesting === 'week' ? 'Generating…' : 'Generate weekly reflection'}
+              hint="Covers the last completed week, from the simulated history above"
+              onPress={() => runReflectionTest('week')}
+            />
+            <DevButton
+              label={aiTesting === 'month' ? 'Generating…' : 'Generate monthly reflection'}
+              hint="Covers the last completed month"
+              onPress={() => runReflectionTest('month')}
+            />
+
+            {aiResult && (
+              <ThemedView type="backgroundSelected" style={styles.aiPreview}>
+                {aiResult.kind === 'push' && (
+                  <ThemedText type="small">
+                    {aiResult.ok
+                      ? 'Sent — check your notification tray.'
+                      : notificationsSupported()
+                        ? 'No permission granted, or the device refused to schedule it.'
+                        : 'Notifications aren’t supported on web.'}
+                  </ThemedText>
+                )}
+
+                {aiResult.kind === 'note' &&
+                  (aiResult.note ? (
+                    <>
+                      <ThemedText type="smallBold">{aiResult.note.headline}</ThemedText>
+                      <ThemedText type="small">{aiResult.note.body}</ThemedText>
+                      {aiResult.note.suggestion && (
+                        <ThemedText type="small" themeColor="textSecondary">
+                          {aiResult.note.suggestion}
+                        </ThemedText>
+                      )}
+                    </>
+                  ) : (
+                    <ThemedText type="small" themeColor="textSecondary">
+                      No note came back — no habits, no signed-in account, or the coach
+                      function isn’t reachable.
+                    </ThemedText>
+                  ))}
+
+                {aiResult.kind === 'reflection' &&
+                  (aiResult.reflection ? (
+                    <>
+                      <ThemedText type="smallBold">{aiResult.reflection.headline}</ThemedText>
+                      <ThemedText type="small">{aiResult.reflection.summary}</ThemedText>
+                      {aiResult.reflection.wins.length > 0 && (
+                        <ThemedText type="small">
+                          Wins: {aiResult.reflection.wins.join(' · ')}
+                        </ThemedText>
+                      )}
+                      {aiResult.reflection.watchOuts.length > 0 && (
+                        <ThemedText type="small">
+                          Watch-outs: {aiResult.reflection.watchOuts.join(' · ')}
+                        </ThemedText>
+                      )}
+                      {aiResult.reflection.suggestion && (
+                        <ThemedText type="small" themeColor="textSecondary">
+                          {aiResult.reflection.suggestion}
+                        </ThemedText>
+                      )}
+                    </>
+                  ) : (
+                    <ThemedText type="small" themeColor="textSecondary">
+                      No reflection came back — the {aiResult.period} had no logged activity,
+                      or the reflect function isn’t reachable.
+                    </ThemedText>
+                  ))}
+              </ThemedView>
+            )}
           </ThemedView>
         )}
 
@@ -342,6 +504,14 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.two,
     borderWidth: 1,
     borderStyle: 'dashed',
+    gap: Spacing.half,
+  },
+  devSectionLabel: {
+    marginTop: Spacing.two,
+  },
+  aiPreview: {
+    padding: Spacing.two,
+    borderRadius: Spacing.two,
     gap: Spacing.half,
   },
   pressed: {

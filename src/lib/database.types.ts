@@ -29,6 +29,8 @@ export type ProfileRow = {
   sound: boolean;
   haptics: boolean;
   reminders_enabled: boolean;
+  /** IANA name, e.g. "America/New_York". Null until a client has synced once. */
+  timezone: string | null;
   updated_at: string;
 };
 

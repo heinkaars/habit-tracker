@@ -32,6 +32,7 @@ export type SyncSettings = {
   sound: boolean;
   haptics: boolean;
   remindersEnabled: boolean;
+  timezone: string | null;
 };
 
 export type SyncState = {
@@ -242,6 +243,7 @@ export async function pushPending(
       sound: state.settings.sound,
       haptics: state.settings.haptics,
       reminders_enabled: state.settings.remindersEnabled,
+      timezone: state.settings.timezone,
       updated_at: at,
     } satisfies ProfileRow);
 
@@ -360,6 +362,7 @@ export function applyRemote(
           sound: snapshot.profile.sound,
           haptics: snapshot.profile.haptics,
           remindersEnabled: snapshot.profile.reminders_enabled,
+          timezone: snapshot.profile.timezone,
         }
       : state.settings;
 

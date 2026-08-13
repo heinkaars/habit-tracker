@@ -92,6 +92,29 @@ export async function rescheduleReminders(options: {
   }
 }
 
+/**
+ * Dev-only: fires one of the two reminder copies immediately, so the content
+ * and formatting can be checked without waiting for a scheduled time. Real
+ * push was scoped out (see CLAUDE.md) — this still goes through the same
+ * local-notification API every other reminder uses, just with no trigger.
+ */
+export async function previewNotification(habit: Habit): Promise<boolean> {
+  if (!notificationsSupported()) return false;
+
+  try {
+    const granted = await requestPermission();
+    if (!granted) return false;
+
+    await Notifications.scheduleNotificationAsync({
+      content: copyFor(habit, new Date().getHours()),
+      trigger: null,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function scheduledCount(): Promise<number> {
   if (!notificationsSupported()) return 0;
 

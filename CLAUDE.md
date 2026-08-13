@@ -164,6 +164,48 @@ already exist, because the budget is full.
 Deploy with `npx supabase functions deploy coach reflect`; set the key with
 `npx supabase secrets set ANTHROPIC_API_KEY=...`. Both need a linked project.
 
+**`coach`'s prompt and cache-then-generate logic live in
+`_shared/coach-generate.ts`**, not in `coach/index.ts` itself — `coach/index.ts`
+is just the HTTP boundary (authenticate, validate `today`, hand off). This is
+what lets `coach-cadence` (below) reuse the identical prompt instead of a second
+copy that could drift, the same reasoning as the `stats.ts` duplication note
+above, just for prose instead of arithmetic.
+
+**`coach-cadence` generates each user's note proactively**, once their local
+morning arrives, instead of only reactively on first open — an hourly sweep
+(scheduled via pg_cron; see the project's Supabase SQL editor for the
+`cron.schedule` call) that checks each profile's stored `timezone` against the
+current hour in that zone and calls the same `getOrGenerateCoachNote` the
+on-demand path uses. The on-demand path stays as a fallback — anyone the sweep
+hasn't reached yet (new signup, no timezone synced) still gets a note the
+moment they open the app, exactly as before this existed.
+
+- **This is the one function that runs as no one.** A cron tick isn't a
+  signed-in user, so `coach-cadence` can't authenticate as a caller and ride
+  RLS the way every other function does — it checks a dedicated `CRON_SECRET`
+  header instead and reads with the service-role client. That key must never
+  reach `src/`, same as everywhere else; the difference here is that this one
+  function is deliberately allowed to hold it, because there's no JWT to hold
+  instead. Every query it makes is still scoped to one `user_id` explicitly
+  (see `getOrGenerateCoachNote`) — the elevated client widens reach across
+  accounts, not what any single call can touch.
+- **`verify_jwt = false` in `config.toml` for this function only.** Supabase's
+  Edge Function gateway requires a valid JWT or project key in `Authorization`
+  before a request reaches function code at all, by default — a cron job has
+  neither, so the platform-level check has to be turned off here for the
+  function's own `CRON_SECRET` check to ever run. Every other function keeps
+  the default on.
+- **Client timezone lives on `profiles.timezone`**, captured once from
+  `Intl.DateTimeFormat().resolvedOptions().timeZone` after storage loads (see
+  the effect in `use-habits.tsx`) and pushed through the same settings sync
+  path as `sound`/`haptics`. Nullable and additive — a user who hasn't synced
+  it yet is simply skipped by the sweep, not blocked from anything.
+- **Push notifications were scoped out deliberately, not forgotten.** Real
+  push needs a development build — Expo Go dropped support for remote push —
+  so wiring push tokens and a send pipeline was deferred until that's worth
+  doing. If it comes back: the two-notes decision (a distinct, shorter
+  afternoon nudge rather than re-sending the morning note) was already made.
+
 ### Storage migrations
 
 `use-habits.tsx` reads `habit-tracker.state.v3`, falling back to v2 (`migrateV2()`, which re-issues every id as a UUID and remaps the challenge's `habitId` through the same table) and then to v1 (`migrateV1()`). Old keys are left in place rather than deleted — users have real history on device, and a bad migration should be recoverable. Reseeding silently destroys it. Two cases:

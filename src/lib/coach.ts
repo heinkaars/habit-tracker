@@ -81,3 +81,27 @@ export async function dismissCoachNote(day: string): Promise<void> {
     .update({ dismissed_at: new Date().toISOString() })
     .eq('day', day);
 }
+
+/**
+ * Dev-only: deletes today's cached note so the next `fetchCoachNote` triggers
+ * a fresh model call instead of returning the one-per-day throttled row. RLS
+ * scopes the delete to the caller, same as `dismissCoachNote` above.
+ */
+export async function devClearCoachNote(day: string): Promise<void> {
+  if (!(await ready())) return;
+
+  await supabase!.from('coach_messages').delete().eq('day', day);
+}
+
+/**
+ * Dev-only: deletes every cached reflection for a period so the next
+ * `fetchReflection` regenerates instead of returning a throttled row. Clears
+ * all period_starts rather than just the current one — `previousPeriod` is
+ * computed server-side (`_shared/stats.ts`), and duplicating that math here
+ * just to target one row isn't worth it for a dev button.
+ */
+export async function devClearReflections(period: 'week' | 'month'): Promise<void> {
+  if (!(await ready())) return;
+
+  await supabase!.from('reflections').delete().eq('period', period);
+}
