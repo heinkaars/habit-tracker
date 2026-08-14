@@ -27,14 +27,14 @@ const SYNC_LABEL: Record<SyncStatus, string> = {
 export default function SettingsScreen() {
   const router = useRouter();
   const safeArea = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, configured } = useAuth();
   const {
     habits,
     challenge,
     settings,
     syncStatus,
     updateSettings,
-    resetToDemo,
+    resetData,
     devShiftChallenge,
     devFillChallenge,
     devSimulateHistory,
@@ -67,11 +67,22 @@ export default function SettingsScreen() {
 
   const clearCelebration = useCallback(() => setCelebration(null), []);
 
+  // The demo habits only come back where they belong in the first place — with
+  // no project configured. Signed in, this clears, and saying "reset to demo
+  // data" would promise fabricated history that deliberately no longer arrives.
+  const resetLabel = configured ? 'Delete all habits' : 'Reset to demo data';
+
   function confirmReset() {
-    Alert.alert('Reset to demo data', 'This replaces your habits and history.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Reset', style: 'destructive', onPress: resetToDemo },
-    ]);
+    Alert.alert(
+      resetLabel,
+      configured
+        ? 'This deletes your habits and history on every device signed into this account.'
+        : 'This replaces your habits and history with the demo set.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: configured ? 'Delete' : 'Reset', style: 'destructive', onPress: resetData },
+      ],
+    );
   }
 
   async function runPushTest() {
@@ -406,7 +417,7 @@ export default function SettingsScreen() {
             onPress={confirmReset}
             accessibilityRole="button"
             style={({ pressed }) => pressed && styles.pressed}>
-            <ThemedText themeColor="accent">Reset to demo data</ThemedText>
+            <ThemedText themeColor="accent">{resetLabel}</ThemedText>
           </Pressable>
         </ThemedView>
       </ScrollView>
