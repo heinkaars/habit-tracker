@@ -21,6 +21,22 @@ type AuthContextValue = {
   loading: boolean;
   /** False when no Supabase credentials are configured. */
   configured: boolean;
+  /**
+   * True when the app should show nothing but the sign-in screen.
+   *
+   * An account is mandatory *when there is a project to hold one* — the app is
+   * a sync client, and a signed-out user accumulates habits that live on one
+   * device, never reach the AI features (see `ready()` in `lib/coach.ts`), and
+   * are lost with the install. Gating on it is what makes the account the thing
+   * that owns the data rather than an upsell buried in Settings.
+   *
+   * With no credentials configured this stays false and the whole remote layer
+   * sits out, exactly as it did before the database existed — that is what
+   * keeps the web preview and a fresh clone usable. Callers must still wait for
+   * `loading`, or a returning user gets a flash of sign-in before their stored
+   * session arrives.
+   */
+  requiresSignIn: boolean;
   signUp: (email: string, password: string) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
@@ -146,6 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session?.user ?? null,
       loading,
       configured: supabase !== null,
+      requiresSignIn: supabase !== null && session === null,
       signUp,
       signIn,
       signOut,

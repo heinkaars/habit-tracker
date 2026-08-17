@@ -20,7 +20,7 @@ It is deliberately structured around a product framework — keep changes inside
 
 **Surface-area budget: 5–7 screens, and it currently sits at 7** (4 tabs + onboarding + the new-habit modal + the sign-in modal). **The budget is now full** — an eighth screen means merging something first, not just deciding to add one.
 
-The seventh was spent deliberately on `sign-in.tsx`: signing in has its own error, validation and email-confirmation states, and folding those into Settings would have made the longest screen in the app longer still.
+The seventh was spent deliberately on `sign-in.tsx`: signing in has its own error, validation and email-confirmation states, and folding those into Settings would have made the longest screen in the app longer still. It is also the app's front door — see "Auth is required" below.
 
 Two things deliberately avoid spending that budget: `new-habit.tsx` doubles as the **edit** screen via `?id=`, and the developer tools live in a `__DEV__`-gated section of Settings rather than their own screen.
 
@@ -108,10 +108,51 @@ the core loop, and a spinner on a check-in destroys it.
 - **Ids are client-generated UUIDs** (`lib/ids.ts`). A habit created offline
   needs its id immediately, and the old `seed-0` / `Date.now()` scheme collided
   across users the moment rows shared a table.
-- **First contact with an account adopts or claims, never merges.** If the
-  account already has habits, the device adopts them wholesale; if it's empty,
-  the device pushes everything up. Merging the two grafts demo seed data onto a
-  real account.
+- **First contact with an account adopts it wholesale — including adopting its
+  emptiness.** The device takes the account's habits, challenge and `onboarded`
+  and drops whatever it was holding. It never merges, and it no longer *claims*
+  either. Claiming (pushing local state up into an empty account) made sense
+  while habits could be created before signing in; auth-required removed that,
+  so anything on the device at first contact belongs to someone else — a demo
+  seed from an install predating `demoSeedAllowed`, or the previous account's
+  cache on a shared device. Both used to be pushed into the new account, which
+  is how fabricated history reached a real account *and* cleared the AI
+  `MIN_ACTIVE_DAYS` floor, and how one user's habits could land in another's.
+  The settings base is `DEFAULT_SETTINGS`, not the device's: `applyRemote` keeps
+  `onboarded` sticky (`local || remote`) so a lagging profile can't bounce an
+  active user back into onboarding, and seeding it from the device carried a
+  stale `true` into new accounts and skipped onboarding for their first user.
+- **Auth is required — but only when there is a project to sign into.**
+  `useAuth().requiresSignIn` is `configured && no session`, and `(tabs)/_layout`
+  redirects on it *before* the onboarding check. `new-habit` carries the same
+  guard because it sits outside the tab group and a deep link or typed web URL
+  reaches it directly. With no credentials configured `requiresSignIn` is always
+  false and nothing is gated, so the web preview and a fresh clone still run
+  local-only exactly as before — don't collapse the two into a bare `!session`.
+  **The order is load-bearing.** The account decides which habits the device
+  has, and first contact *adopts wholesale*, so onboarding first would have the
+  user pick a starter and begin a challenge only for the first sync to discard
+  both. Sign-in first also means a returning user on a new device picks
+  `onboarded` up from their profile and never repeats onboarding.
+  `sign-in.tsx` is two screens in one: reached from Settings while signed in
+  it's a dismissable modal, and as the gate the root stack drops its header and
+  swipe-down (`gestureEnabled: false`), because every exit it used to offer led
+  to a layout that redirects straight back. The form branch is unreachable
+  except as the gate, which is why it has no "skip" and draws its own header and
+  safe-area inset.
+- **The demo seed is for the no-project mode only.** `demoSeedAllowed()` in
+  `use-habits.tsx` is `supabase === null`, and both `freshState()` and
+  `resetData()` (formerly `resetToDemo`) gate on it. `seedHabits()` builds four
+  habits with ~37 backdated check-ins, and a device that still holds them
+  renders them as the user's own history. Two things break at once: Insights
+  reports invented streaks on day one,
+  and the AI spend guard opens — **`MIN_ACTIVE_DAYS` counts distinct days in
+  `check_ins`**, so a brand-new account clears the 3-day history threshold on
+  fabricated rows and the coach writes about habits the user never had. Empty is
+  a supported state: Today, Insights and Challenge each render their own empty
+  copy, and onboarding adds the user's first real habit straight after. Don't
+  reintroduce an unconditional seed — and note the empty path is now the common
+  one, so those empty states are load-bearing rather than defensive.
 - **RLS is the access control**, not app code. Every table carries `user_id` and
   one `auth.uid() = user_id` policy. The anon key ships inside the bundle by
   design; it is the policies that keep one user out of another's rows. The

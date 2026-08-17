@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+.env
+.env.local
+.env.example
+.claude
+supabase
+scripts
+*.test.ts
+*.test.mts
+.DS_Store

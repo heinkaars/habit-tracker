@@ -132,7 +132,7 @@ type HabitsContextValue = {
   startChallenge: (habitId: string, lengthDays?: number, name?: string) => void;
   dismissChallenge: () => void;
   updateSettings: (patch: Partial<Settings>) => void;
-  resetToDemo: () => void;
+  resetData: () => void;
   /** Dev-only helpers, surfaced in Settings behind __DEV__. */
   devShiftChallenge: (deltaDays: number) => void;
   devFillChallenge: (leaveLastDayOpen: boolean) => void;
@@ -211,9 +211,37 @@ function migrateV2(state: State): State {
   });
 }
 
+/**
+ * Whether a blank slate should be filled with the demo habits.
+ *
+ * The seed exists so the app is explorable the moment it opens — Today has
+ * rows, Insights has a chart, streaks exist — and that is worth keeping for the
+ * no-project mode, where there is no account to hold real data and the web
+ * preview and a fresh clone are the whole audience.
+ *
+ * With a project configured it is actively wrong. Every user now signs in
+ * (see `requiresSignIn` in `use-auth.tsx`), and first contact with an empty
+ * account pushes local state up wholesale — so the seed's two weeks of
+ * backdated check-ins land in a real account as if the user had done them.
+ * That is the "demo seed grafted onto a real account" case the sync rules exist
+ * to prevent, arriving by a different door. It also defeats the AI spend guard:
+ * `MIN_ACTIVE_DAYS` counts distinct days in `check_ins`, so a day-old account
+ * clears the history threshold on fabricated rows and the coach writes about
+ * habits the user never had.
+ *
+ * Evaluated per call rather than captured at import: `supabase` is constructed
+ * at module load and this keeps the two from depending on import order.
+ */
+function demoSeedAllowed(): boolean {
+  return supabase === null;
+}
+
 function freshState(): State {
   return {
-    habits: seedHabits(),
+    // Empty is a supported state, not a broken one — Today, Insights and
+    // Challenge all render their own empty copy, and onboarding puts the user's
+    // first real habit in immediately after.
+    habits: demoSeedAllowed() ? seedHabits() : [],
     challenge: null,
     settings: DEFAULT_SETTINGS,
     pending: [],
@@ -332,37 +360,39 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     try {
       const current = stateRef.current;
 
-      // First contact with an account: adopt what's already there, or claim it
-      // with what's on this device. Merging the two would silently graft demo
-      // seed data onto a real account.
+      // First contact with an account: adopt it wholesale — including adopting
+      // its emptiness.
+      //
+      // This used to *claim* an empty account instead, pushing whatever was on
+      // the device up into it. That made sense when habits could be created
+      // before signing in. Under auth-required they can't, so anything sitting
+      // here at first contact is one of two things, and neither belongs to this
+      // account: a demo seed left by an install that predates `demoSeedAllowed`,
+      // or the previous account's cache still on a shared device. Claiming
+      // pushed both into the new account — fabricated history that also cleared
+      // the AI features' `MIN_ACTIVE_DAYS` floor in the first case, and one
+      // user's habits landing in another's account in the second.
       if (current.accountId !== userId) {
         const snapshot = await pullSince(client, userId, null);
 
-        if (snapshot.habits.length > 0) {
-          const adopted = applyRemote(
-            { habits: [], challenge: null, settings: current.settings },
-            snapshot,
-            [],
-          );
+        const adopted = applyRemote(
+          // DEFAULT_SETTINGS, not the device's. `onboarded` is a fact about the
+          // account, and `applyRemote` keeps it sticky (`local || remote`) so a
+          // profile that hasn't caught up can't bounce an active user back into
+          // onboarding. Seeding that from the device would carry a stale `true`
+          // into a brand-new account and skip onboarding for its first user.
+          { habits: [], challenge: null, settings: DEFAULT_SETTINGS },
+          snapshot,
+          [],
+        );
 
-          setState((prev) => ({
-            ...prev,
-            ...adopted,
-            pending: [],
-            lastPulledAt: snapshot.watermark,
-            accountId: userId,
-          }));
-        } else {
-          const ops = allOps(syncView(current));
-          const failed = await pushPending(client, userId, syncView(current), ops);
-
-          setState((prev) => ({
-            ...prev,
-            pending: failed,
-            lastPulledAt: snapshot.watermark,
-            accountId: userId,
-          }));
-        }
+        setState((prev) => ({
+          ...prev,
+          ...adopted,
+          pending: [],
+          lastPulledAt: snapshot.watermark,
+          accountId: userId,
+        }));
 
         setSyncError(false);
         return;
@@ -590,13 +620,19 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     }
   }, [loading, updateSettings]);
 
-  const resetToDemo = useCallback(() => {
+  /**
+   * Starts over. Reseeds the demo habits only where the seed belongs at all
+   * (see `demoSeedAllowed`) — with a project configured this clears and stops,
+   * because pushing fabricated history into the signed-in account is the thing
+   * the seed rule exists to prevent. Settings labels the button to match.
+   */
+  const resetData = useCallback(() => {
     setState((current) => {
       const at = now();
       // Tombstone what's there so the reset reaches other devices instead of
       // leaving orphans behind on the server.
       const buried = current.habits.map((habit) => ({ ...habit, deletedAt: habit.deletedAt ?? at }));
-      const seeded = seedHabits();
+      const seeded = demoSeedAllowed() ? seedHabits() : [];
 
       const next: State = {
         ...current,
@@ -751,7 +787,7 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
       startChallenge,
       dismissChallenge,
       updateSettings,
-      resetToDemo,
+      resetData,
       devShiftChallenge,
       devFillChallenge,
       devSimulateHistory,
@@ -770,7 +806,7 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
       startChallenge,
       dismissChallenge,
       updateSettings,
-      resetToDemo,
+      resetData,
       devShiftChallenge,
       devFillChallenge,
       devSimulateHistory,

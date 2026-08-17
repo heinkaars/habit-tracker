@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
@@ -6,6 +6,7 @@ import { SelectChip } from '@/components/select-chip';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { useHabits } from '@/hooks/use-habits';
 import { useTheme } from '@/hooks/use-theme';
 import { EMOJI_CHOICES, formatTime, parseTime, type Habit, type HabitKind } from '@/lib/habits';
@@ -17,10 +18,17 @@ const TARGET_OPTIONS = [2, 3, 4, 6, 8];
 export default function HabitFormScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { habits, loading } = useHabits();
+  const { requiresSignIn, loading: authLoading } = useAuth();
+
+  // This route lives outside the tab group, so the guard there doesn't cover it
+  // and a deep link or a typed web URL lands here directly. Without this it is
+  // the one place a signed-out user could still create a habit — one that then
+  // never syncs, because `queue()` drops ops with no account to push them to.
+  if (!authLoading && requiresSignIn) return <Redirect href="/sign-in" />;
 
   // The form seeds its fields from `useState` initialisers, which only run once.
   // Waiting for storage (and keying by id) is what makes an edit arrive filled in.
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <ThemedView style={styles.container}>
         <ScrollView contentContainerStyle={styles.content}>

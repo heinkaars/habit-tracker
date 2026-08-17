@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SelectChip } from '@/components/select-chip';
 import { ThemedText } from '@/components/themed-text';
@@ -28,8 +29,13 @@ const RESET_CODE_LENGTH = 6;
 export default function SignInScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const safeArea = useSafeAreaInsets();
   const { configured, user, signIn, signUp, signOut, requestPasswordReset, resetPassword } =
     useAuth();
+
+  // The gate hides the stack header, so this screen has to keep itself clear of
+  // the status bar on its own. Harmless in the modal states, which sit lower.
+  const contentInset = { paddingTop: safeArea.top + Spacing.three };
 
   const [mode, setMode] = useState<Mode>('signIn');
   const [resetStage, setResetStage] = useState<ResetStage>('request');
@@ -53,10 +59,10 @@ export default function SignInScreen() {
   /**
    * Leaving this screen has to work even when nothing is underneath it.
    *
-   * It's a modal, so the normal path (Settings → Account) pops back. But a deep
-   * link, a web reload, or a notification tap can land here as the *first*
-   * route — and then `back()` has nothing to pop to and strands the user on a
-   * sign-in screen with no way into the app.
+   * On the normal path (Settings → Account) it's a modal and pops back. But when
+   * it's standing in as the sign-in gate it is the *first* route, and then
+   * `back()` has nothing to pop to — `replace('/')` sends the now-signed-in user
+   * through the tab layout's guard instead, which lets them past.
    */
   const dismiss = useCallback(() => {
     if (router.canGoBack()) {
@@ -141,7 +147,7 @@ export default function SignInScreen() {
   if (!configured) {
     return (
       <ThemedView style={styles.container}>
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={[styles.content, contentInset]}>
           <ThemedView type="backgroundElement" style={styles.card}>
             <ThemedText type="smallBold">No project configured</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
@@ -160,22 +166,25 @@ export default function SignInScreen() {
   if (user) {
     return (
       <ThemedView style={styles.container}>
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={[styles.content, contentInset]}>
           <ThemedView type="backgroundElement" style={styles.card}>
             <ThemedText type="smallBold">Signed in</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
               {user.email}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
-              Your habits sync to this account. Signing out leaves the data on this device
-              and stops syncing.
+              Your habits sync to this account. Signing out returns you to this screen —
+              your habits stay safe in the account and come back when you sign in again.
             </ThemedText>
           </ThemedView>
 
           <Pressable
             onPress={async () => {
               await signOut();
-              dismiss();
+              // Not `dismiss()`: popping back to Settings lands on a tab layout
+              // that immediately redirects here anyway. Going through the root
+              // makes that one transition instead of two.
+              router.replace('/');
             }}
             accessibilityRole="button"
             style={({ pressed }) => [
@@ -195,7 +204,7 @@ export default function SignInScreen() {
   if (mode === 'reset') {
     return (
       <ThemedView style={styles.container}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.content, contentInset]} keyboardShouldPersistTaps="handled">
           <ThemedView type="backgroundElement" style={styles.card}>
             <ThemedText type="smallBold">Reset your password</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
@@ -301,15 +310,28 @@ export default function SignInScreen() {
           </Pressable>
 
           <DismissLink onPress={() => goTo('signIn')} label="Back to sign in" />
-          <DismissLink onPress={dismiss} />
         </ScrollView>
       </ThemedView>
     );
   }
 
+  // Everything below is the gate: the two branches above have already taken the
+  // configured-but-signed-in and no-project cases, so reaching here means an
+  // account is required and there isn't one. That's why nothing here offers a
+  // way out — there is no app behind this screen to go back to, and the header
+  // is drawn in content because the stack hides its own when gating.
   return (
     <ThemedView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.content, contentInset]} keyboardShouldPersistTaps="handled">
+        <View style={styles.header}>
+          <ThemedText type="title">
+            {mode === 'signUp' ? 'Create your account' : 'Welcome back'}
+          </ThemedText>
+          <ThemedText themeColor="textSecondary">
+            Your habits live in your account, so they survive a new phone.
+          </ThemedText>
+        </View>
+
         <ThemedView type="backgroundElement" style={styles.card}>
           <View style={styles.chips}>
             <SelectChip
@@ -326,7 +348,7 @@ export default function SignInScreen() {
 
           <ThemedText type="small" themeColor="textSecondary">
             {mode === 'signUp'
-              ? 'Creating an account backs up your habits and lets you pick them up on another device.'
+              ? "We'll email you a link to confirm the address before your first sign-in."
               : 'Sign in to pull your habits back down onto this device.'}
           </ThemedText>
 
@@ -407,11 +429,9 @@ export default function SignInScreen() {
           )}
         </Pressable>
 
-        <DismissLink onPress={dismiss} label="Skip for now — keep using the app" />
-
         <ThemedText type="small" themeColor="textSecondary" style={styles.footnote}>
-          Habits you already have on this device stay put. Signing into an account that
-          already has habits replaces them with that account&apos;s.
+          Signing into an account that already has habits replaces whatever is on this
+          device with that account&apos;s.
         </ThemedText>
       </ScrollView>
     </ThemedView>
@@ -419,9 +439,10 @@ export default function SignInScreen() {
 }
 
 /**
- * Signing in is optional, so every state on this screen needs a visible exit.
- * Relying on the modal's own dismiss gesture wasn't enough — it doesn't exist
- * when this screen is the first route.
+ * The visible exit for the two states that have somewhere to go: signed in
+ * (reached from Settings) and no project configured (where the app runs
+ * local-only and this screen is purely informational). The sign-in form itself
+ * deliberately has none — see the comment above it.
  */
 function DismissLink({ onPress, label = 'Back to my habits' }: { onPress: () => void; label?: string }) {
   return (
@@ -447,6 +468,9 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     width: '100%',
     maxWidth: MaxContentWidth,
+  },
+  header: {
+    gap: Spacing.two,
   },
   card: {
     padding: Spacing.three,
