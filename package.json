@@ -47,6 +47,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "web:preview": "EXPO_NO_DEPENDENCY_VALIDATION=1 expo start --web",
+    "build": "expo export --platform web",
     "lint": "expo lint",
     "test:parity": "cd scripts/parity && tsx stats-parity.test.mts"
   },
