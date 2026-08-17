@@ -360,37 +360,39 @@ export function HabitsProvider({ children }: { children: ReactNode }) {
     try {
       const current = stateRef.current;
 
-      // First contact with an account: adopt what's already there, or claim it
-      // with what's on this device. Merging the two would silently graft demo
-      // seed data onto a real account.
+      // First contact with an account: adopt it wholesale — including adopting
+      // its emptiness.
+      //
+      // This used to *claim* an empty account instead, pushing whatever was on
+      // the device up into it. That made sense when habits could be created
+      // before signing in. Under auth-required they can't, so anything sitting
+      // here at first contact is one of two things, and neither belongs to this
+      // account: a demo seed left by an install that predates `demoSeedAllowed`,
+      // or the previous account's cache still on a shared device. Claiming
+      // pushed both into the new account — fabricated history that also cleared
+      // the AI features' `MIN_ACTIVE_DAYS` floor in the first case, and one
+      // user's habits landing in another's account in the second.
       if (current.accountId !== userId) {
         const snapshot = await pullSince(client, userId, null);
 
-        if (snapshot.habits.length > 0) {
-          const adopted = applyRemote(
-            { habits: [], challenge: null, settings: current.settings },
-            snapshot,
-            [],
-          );
+        const adopted = applyRemote(
+          // DEFAULT_SETTINGS, not the device's. `onboarded` is a fact about the
+          // account, and `applyRemote` keeps it sticky (`local || remote`) so a
+          // profile that hasn't caught up can't bounce an active user back into
+          // onboarding. Seeding that from the device would carry a stale `true`
+          // into a brand-new account and skip onboarding for its first user.
+          { habits: [], challenge: null, settings: DEFAULT_SETTINGS },
+          snapshot,
+          [],
+        );
 
-          setState((prev) => ({
-            ...prev,
-            ...adopted,
-            pending: [],
-            lastPulledAt: snapshot.watermark,
-            accountId: userId,
-          }));
-        } else {
-          const ops = allOps(syncView(current));
-          const failed = await pushPending(client, userId, syncView(current), ops);
-
-          setState((prev) => ({
-            ...prev,
-            pending: failed,
-            lastPulledAt: snapshot.watermark,
-            accountId: userId,
-          }));
-        }
+        setState((prev) => ({
+          ...prev,
+          ...adopted,
+          pending: [],
+          lastPulledAt: snapshot.watermark,
+          accountId: userId,
+        }));
 
         setSyncError(false);
         return;

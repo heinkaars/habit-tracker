@@ -108,10 +108,20 @@ the core loop, and a spinner on a check-in destroys it.
 - **Ids are client-generated UUIDs** (`lib/ids.ts`). A habit created offline
   needs its id immediately, and the old `seed-0` / `Date.now()` scheme collided
   across users the moment rows shared a table.
-- **First contact with an account adopts or claims, never merges.** If the
-  account already has habits, the device adopts them wholesale; if it's empty,
-  the device pushes everything up. Merging the two grafts demo seed data onto a
-  real account.
+- **First contact with an account adopts it wholesale — including adopting its
+  emptiness.** The device takes the account's habits, challenge and `onboarded`
+  and drops whatever it was holding. It never merges, and it no longer *claims*
+  either. Claiming (pushing local state up into an empty account) made sense
+  while habits could be created before signing in; auth-required removed that,
+  so anything on the device at first contact belongs to someone else — a demo
+  seed from an install predating `demoSeedAllowed`, or the previous account's
+  cache on a shared device. Both used to be pushed into the new account, which
+  is how fabricated history reached a real account *and* cleared the AI
+  `MIN_ACTIVE_DAYS` floor, and how one user's habits could land in another's.
+  The settings base is `DEFAULT_SETTINGS`, not the device's: `applyRemote` keeps
+  `onboarded` sticky (`local || remote`) so a lagging profile can't bounce an
+  active user back into onboarding, and seeding it from the device carried a
+  stale `true` into new accounts and skipped onboarding for their first user.
 - **Auth is required — but only when there is a project to sign into.**
   `useAuth().requiresSignIn` is `configured && no session`, and `(tabs)/_layout`
   redirects on it *before* the onboarding check. `new-habit` carries the same
@@ -133,10 +143,9 @@ the core loop, and a spinner on a check-in destroys it.
 - **The demo seed is for the no-project mode only.** `demoSeedAllowed()` in
   `use-habits.tsx` is `supabase === null`, and both `freshState()` and
   `resetData()` (formerly `resetToDemo`) gate on it. `seedHabits()` builds four
-  habits with ~37 backdated check-ins; with a project configured, every user
-  signs in and first contact with an empty account pushes local state up
-  wholesale, so that history lands in a real account as if the user had earned
-  it. Two things break at once: Insights reports invented streaks on day one,
+  habits with ~37 backdated check-ins, and a device that still holds them
+  renders them as the user's own history. Two things break at once: Insights
+  reports invented streaks on day one,
   and the AI spend guard opens — **`MIN_ACTIVE_DAYS` counts distinct days in
   `check_ins`**, so a brand-new account clears the 3-day history threshold on
   fabricated rows and the coach writes about habits the user never had. Empty is
